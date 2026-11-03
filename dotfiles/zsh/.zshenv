@@ -1,0 +1,5 @@
+export EDITOR="nvim"
+export VISUAL="$EDITOR"
+export PAGER="less"
+export LESS="-FRX"
+export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.cargo/bin:$PATH"

@@ -1,0 +1,11 @@
+local map = vim.keymap.set
+map("n", "<leader>w", "<cmd>write<cr>", { desc = "Save" })
+map("n", "<leader>q", "<cmd>quit<cr>", { desc = "Quit" })
+map("n", "<leader>e", "<cmd>Neotree toggle<cr>", { desc = "Explorer" })
+map("n", "<leader>ff", "<cmd>Telescope find_files<cr>", { desc = "Find files" })
+map("n", "<leader>fg", "<cmd>Telescope live_grep<cr>", { desc = "Live grep" })
+map("n", "<leader>fb", "<cmd>Telescope buffers<cr>", { desc = "Buffers" })
+map("n", "<leader>xx", "<cmd>Trouble diagnostics toggle<cr>", { desc = "Diagnostics" })
+map("n", "[d", vim.diagnostic.goto_prev)
+map("n", "]d", vim.diagnostic.goto_next)
+map("n", "<Esc>", "<cmd>nohlsearch<cr>")

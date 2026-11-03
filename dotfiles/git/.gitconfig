@@ -1,0 +1,32 @@
+[init]
+ defaultBranch = main
+[core]
+ editor = nvim
+ autocrlf = input
+ excludesfile = ~/.config/git/ignore
+[pull]
+ ff = only
+[fetch]
+ prune = true
+ pruneTags = true
+[push]
+ autoSetupRemote = true
+ default = simple
+[diff]
+ colorMoved = default
+[merge]
+ conflictstyle = zdiff3
+[rerere]
+ enabled = true
+[help]
+ autocorrect = prompt
+[alias]
+ st = status -sb
+ co = checkout
+ br = branch
+ ci = commit
+ lg = log --oneline --graph --decorate --all
+ last = log -1 HEAD --stat
+# Machine-specific identity (name/email) lives in ~/.gitconfig.local, written by setup.
+[include]
+ path = ~/.gitconfig.local
