@@ -1,5 +1,12 @@
-export EDITOR="nvim"
-export VISUAL="$EDITOR"
-export PAGER="less"
-export LESS="-FRX"
-export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.cargo/bin:$PATH"
+# Ensure PATH contains unique entries.
+typeset -U path PATH
+
+# User-level binaries.
+path=(
+    "$HOME/.local/bin"
+    "$HOME/bin"
+    "$HOME/.cargo/bin"
+    $path
+)
+
+export PATH
