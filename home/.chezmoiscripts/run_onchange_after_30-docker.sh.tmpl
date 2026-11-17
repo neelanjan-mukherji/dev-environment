@@ -11,18 +11,34 @@ step "Docker Engine"
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     info "Already installed: $(docker --version)"
 else
-    case "${ID:-}" in
-        ubuntu | debian) ;;
-        *) record_skip "docker: ${PRETTY_NAME:-this distro} is not supported yet (planned: milestone 4)"; exit 0 ;;
-    esac
+    if ! is_debian_like; then
+        record_skip "docker: ${PRETTY_NAME:-this distro} is not supported yet (planned: milestone 4)"
+        exit 0
+    fi
+    # Docker publishes repos for Ubuntu and Debian; derivatives use their base's.
+    if [ -n "${UBUNTU_CODENAME:-}" ]; then repo_os=ubuntu codename="$UBUNTU_CODENAME"
+    else repo_os=debian codename="${VERSION_CODENAME:?}"; fi
     if ! can_sudo; then record_skip "docker (needs sudo)"; exit 0; fi
-    as_root apt-get remove -y docker.io docker-doc docker-compose podman-docker containerd runc >/dev/null 2>&1 || true
+
+    # Distro packages that conflict with Docker's own.
+    conflicting=()
+    for pkg in docker.io docker-doc docker-compose podman-docker containerd runc; do
+        dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed' && conflicting+=("$pkg")
+    done
+    if [ "${#conflicting[@]}" -gt 0 ]; then
+        info "These distro packages conflict with Docker Engine: ${conflicting[*]}"
+        if ! confirm "Remove them and install Docker Engine from download.docker.com?"; then
+            record_skip "docker (conflicting packages kept: ${conflicting[*]})"
+            exit 0
+        fi
+        as_root apt-get remove -y "${conflicting[@]}"
+    fi
     as_root install -m 0755 -d /etc/apt/keyrings
-    run curl -fsSL "https://download.docker.com/linux/${ID}/gpg" -o "$DEVENV_STATE/docker.gpg"
+    run curl -fsSL "https://download.docker.com/linux/${repo_os}/gpg" -o "$DEVENV_STATE/docker.gpg"
     as_root gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg "$DEVENV_STATE/docker.gpg"
     rm -f "$DEVENV_STATE/docker.gpg"
     as_root chmod a+r /etc/apt/keyrings/docker.gpg
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${ID} ${UBUNTU_CODENAME:-$VERSION_CODENAME} stable" |
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${repo_os} ${codename} stable" |
         as_root tee /etc/apt/sources.list.d/docker.list >/dev/null
     as_root apt-get update -qq
     as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
@@ -48,14 +64,16 @@ if [ "$systemd_state" = running ] || [ "$systemd_state" = degraded ] || [ "$syst
     fi
 elif is_wsl; then
     info "The Docker daemon needs systemd, which is off in this WSL distro."
-    if grep -Eq '^[[:space:]]*systemd[[:space:]]*=[[:space:]]*true' /etc/wsl.conf 2>/dev/null; then
+    current_conf="$(cat /etc/wsl.conf 2>/dev/null || true)"
+    wanted_conf="$(printf '%s\n' "$current_conf" | wsl_conf_with_systemd)"
+    if [ "$current_conf" = "$wanted_conf" ]; then
         info "systemd is already enabled in /etc/wsl.conf; restart WSL with 'wsl.exe --shutdown' from Windows."
-    elif confirm "Enable systemd in /etc/wsl.conf ([boot] systemd=true)?" && can_sudo; then
-        if grep -q '^\[boot\]' /etc/wsl.conf 2>/dev/null; then
-            as_root sed -i '/^\[boot\]/a systemd=true' /etc/wsl.conf
-        else
-            printf '\n[boot]\nsystemd=true\n' | as_root tee -a /etc/wsl.conf >/dev/null
-        fi
+        exit 0
+    fi
+    info "Proposed change to /etc/wsl.conf:"
+    diff <(printf '%s\n' "$current_conf") <(printf '%s\n' "$wanted_conf") | sed 's/^/      /' || true
+    if confirm "Write this to /etc/wsl.conf?" && can_sudo; then
+        printf '%s\n' "$wanted_conf" | as_root tee /etc/wsl.conf >/dev/null
         info "Done. Run 'wsl.exe --shutdown' from Windows, reopen the terminal, then re-run setup."
     else
         record_skip "docker daemon: systemd not enabled in /etc/wsl.conf"

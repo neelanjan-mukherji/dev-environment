@@ -1,12 +1,6 @@
 # Login shells (sh/bash). Managed by chezmoi from ~/dev-environment.
 
-case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH" ;; esac
-
-# mise shims make managed tools available to non-interactive programs.
-mise_shims="${XDG_DATA_HOME:-$HOME/.local/share}/mise/shims"
-case ":$PATH:" in *":$mise_shims:"*) ;; *) PATH="$mise_shims:$PATH" ;; esac
-unset mise_shims
-export PATH
+. "$HOME/.config/shell/path.sh"
 
 [ -f "$HOME/.profile.local" ] && . "$HOME/.profile.local"
 

@@ -11,7 +11,8 @@ Personal workstation setup meant to run on every OS. The v2 redesign lives on br
 ```bash
 make check                    # shellcheck + ci/test-render.sh (fast, no Docker, never touches $HOME)
 make test FILTER=<substring>  # run matching render tests only
-make test-containers          # ci/run-containers.sh: install.sh --yes + ci/verify.sh in clean ubuntu/debian containers
+make test-containers          # ci/run-containers.sh: install.sh --yes + ci/verify.sh in clean ubuntu/debian containers ("full" runs as a v1 migration via ci/seed-v1.sh)
+make verify                   # ci/verify.sh against this machine
 BASES=debian:13 PROFILES=full make test-containers
 ./install.sh --dry-run        # renders against the real $HOME with scratch config/state; changes nothing
 ```
@@ -22,12 +23,15 @@ Render tests need `chezmoi`, `shellcheck`, `zsh` and `script` (util-linux) on PA
 
 - `.chezmoiroot` = `home`, so `home/` is the chezmoi source state. The repo root holds `install.sh`, `ci/`, and `docs/`. chezmoi's `sourceDir` is the clone itself (`~/dev-environment`).
 - **Machine config.** `home/.chezmoi.toml.tmpl` asks once for `profile`, `name` and `email`. Each value can be overridden with an env var: `DEVENV_PROFILE`, `DEVENV_NAME`, `DEVENV_EMAIL`, `DEVENV_ADD`, `DEVENV_REMOVE`, `DEVENV_THEME`. Values already in the existing config are carried over on re-init. Use the env vars rather than `--promptChoice`/`--promptString`, whose keys are the prompt *text*. `install.sh` flags map onto these env vars.
-- **Components.** `home/.chezmoidata/profiles.yaml` maps each profile to its components. `home/.chezmoitemplates/components` computes the effective list (profile + add − remove); templates use it via `includeTemplate "components" . | splitList ","`. Any new component must be added to `$known` in the config template as well.
-- **Packages.** mise installs every tool and language (`home/dot_config/mise/config.toml.tmpl`). The OS package manager installs only the base packages in `home/.chezmoidata/packages.yaml`. Policy: CLI tools use `latest`; toolchains and Neovim are pinned.
-- **Install scripts.** `home/.chezmoiscripts/` holds the install steps; all of them include `.chezmoitemplates/lib.sh`, which provides `step`, `run`, `as_root`, `confirm`, `can_sudo`, `record_skip`.
-  - **Conventions:** echo every system-changing command; `confirm` before risky actions (`DEVENV_YES=1` answers yes); when something is impossible (no sudo, unsupported distro), call `record_skip` and exit 0; exit non-zero only on real failure, so chezmoi retries the script on the next apply.
+- **Components.** `home/.chezmoidata/profiles.yaml` maps each profile to its components. `home/.chezmoitemplates/components` computes the effective list (profile + add − remove, plus each component's `$requires`, e.g. cloud → python); templates use it via `includeTemplate "components" . | splitList ","`. Any new component must be added to `$known` in the config template as well.
+- **Packages.** mise installs every tool and language (`home/private_dot_config/mise/config.toml.tmpl`). The OS package manager installs only the base packages in `home/.chezmoidata/packages.yaml`. Policy: CLI tools use `latest`; toolchains and Neovim are pinned.
+- **Install scripts.** `home/.chezmoiscripts/` holds the install steps; all of them include `.chezmoitemplates/lib.sh`, which provides `step`, `run`, `as_root`, `confirm`, `can_sudo`, `record_skip`, `is_debian_like`.
+  - **Conventions:** echo every system-changing command (`run` echoes to stderr, so redirecting output never hides it); `confirm` before risky actions (`DEVENV_YES=1` answers yes); when something is impossible (no sudo, unsupported distro), call `record_skip` and exit 0; exit non-zero only on real failure: lib.sh logs it to `failed.log` under the current `step` name, and chezmoi retries the script on the next apply.
+  - **Exception:** `run_before_00-migrate-v1` fails when declined, since applying over v1 directory links would write into the old tree. `install.sh` runs it before its preview/backup and stops if it fails.
+  - **Steps that must retry after a skip** (login shell, retiring v1 tools) are `run_after_` scripts that stay silent when there is nothing to do; verify.sh's no-op check depends on that silence. A declined prompt is remembered in `~/.local/state/dev/`.
   - **Gating:** `run_onchange_` scripts embed a hash of their inputs, which is what makes them re-run. A script that renders to empty is skipped, and that's how OS/component gating works.
 - **Externals.** `home/.chezmoiexternal.toml.tmpl` fetches Zinit, TPM and the Catppuccin theme files, so shell startup never touches the network. `.zshrc` must keep working when Zinit or tools are missing; the render tests assert that.
+- **PATH** is defined once in `~/.config/shell/path.sh`, sourced by `.zshenv`, `.profile`, `.bashrc` and lib.sh.
 - **Shells.** zsh and the bash fallback share `~/.config/shell/{env.sh,aliases.sh,functions.sh}`; those files must stay valid in both shells. zsh-only syntax goes in `~/.config/zsh/aliases.zsh`. Integrations stay guarded with `command -v`.
 - **Theme.** `home/.chezmoidata/catppuccin.yaml` is generated from catppuccin/palette (don't hand-edit it). Templates read `(index .catppuccin .theme.flavor).colors`.
 - **Platform differences.** Detect at runtime where possible (`clipcopy`, `has("wsl")` in nvim, the opener in `aliases.zsh`). Template on `.chezmoi.os` only when runtime detection isn't possible.

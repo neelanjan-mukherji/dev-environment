@@ -1,7 +1,15 @@
 {{- /* Effective component list for this machine, comma-joined.
-       Use: {{ $on := includeTemplate "components" . | splitList "," }} */ -}}
+       Use: {{ $on := includeTemplate "components" . | splitList "," }}
+       profile + add - remove, then each component's requirements (which win
+       over remove: cloud's azure-cli cannot run without python). */ -}}
+{{- $requires := dict "cloud" (list "python") -}}
 {{- $on := list -}}
 {{- range (concat (index .profiles .profile) .components.add) -}}
 {{-   if and (not (has . $.components.remove)) (not (has . $on)) }}{{ $on = append $on . }}{{ end -}}
+{{- end -}}
+{{- range $on -}}
+{{-   range (get $requires . | default (list)) -}}
+{{-     if not (has . $on) }}{{ $on = append $on . }}{{ end -}}
+{{-   end -}}
 {{- end -}}
 {{- join "," $on -}}

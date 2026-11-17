@@ -1,21 +1,27 @@
 {{- if eq .chezmoi.os "linux" -}}
 #!/usr/bin/env bash
+# Runs on every apply so a skipped change (no sudo yet) is retried; silent once
+# zsh is the login shell. A "no" is remembered until the marker file is deleted.
 set -Eeuo pipefail
 {{ template "lib.sh" . }}
 
-step "Login shell"
 user="$(id -un)"
 zsh_path="$(command -v zsh || true)"
+current="$(getent passwd "$user" | cut -d: -f7)"
+declined="$DEVENV_STATE/login-shell.declined"
+[ -n "$zsh_path" ] && [ "$(basename "$current")" = zsh ] && exit 0
+[ -f "$declined" ] && exit 0
+
+step "Login shell"
 if [ -z "$zsh_path" ]; then
     record_skip "login shell: zsh is not installed, the bash fallback stays active"
     exit 0
 fi
-current="$(getent passwd "$user" | cut -d: -f7)"
-if [ "$current" = "$zsh_path" ]; then
-    info "Already zsh."
-    exit 0
-fi
 if ! confirm "Change the login shell for $user from $current to $zsh_path?"; then
+    if have_tty && ! assume_yes; then
+        : >"$declined"
+        info "Won't ask again. To be asked next time: rm $declined"
+    fi
     record_skip "login shell change (declined); bash fallback stays active"
     exit 0
 fi

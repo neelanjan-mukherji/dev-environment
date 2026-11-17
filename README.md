@@ -26,11 +26,18 @@ git clone https://github.com/neelanjan-mukherji/dev-environment.git ~/dev-enviro
 ```
 
 The installer is hands-on:
-1. It asks for a profile and your git identity, once per machine.
-2. It shows which files will change and backs up the existing ones to `~/.dotfiles-backup/<timestamp>/`.
-3. It prints each command before running it, and asks before risky steps (login shell, docker group, `/etc/wsl.conf`, removing SDKMAN/nvm).
+1. It asks for a profile and your git identity, once per machine. The email
+   defaults to your GitHub noreply address when one can be found.
+2. On a v1 (Stow) machine it first removes the old symlinks, after asking, and
+   suggests the `full` profile. Your `dotfiles/` copy is left untouched.
+3. It shows which files will change and backs up the existing ones to `~/.dotfiles-backup/<timestamp>/`.
+4. It prints each command before running it, and asks before risky steps (login
+   shell, docker group, `/etc/wsl.conf`, removing SDKMAN, nvm or old v1 binaries
+   once mise replaces them).
 
-Steps it cannot do, for example without sudo, are skipped and listed at the end rather than failing the run.
+Steps it cannot do, for example without sudo, are skipped and listed at the end
+(`~/.local/state/dev/skipped.log`) rather than failing the run. Failed steps are
+listed too (`failed.log`); re-running retries them.
 
 ```bash
 ./install.sh --dry-run                     # show what would change; touches nothing
@@ -88,4 +95,5 @@ files are honoured automatically.
 make check             # shellcheck + render tests (no Docker; never touches $HOME)
 make test FILTER=theme # one render test
 make test-containers   # full install + verify in clean Ubuntu/Debian containers
+make verify            # run the container checks against this machine
 ```

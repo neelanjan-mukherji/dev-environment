@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Runs before every apply; does nothing unless v1 GNU Stow symlinks are present.
+# install.sh runs this same script *before* its preview and backup, and stops if
+# it fails. Unlike the other steps, declining fails instead of skipping: applying
+# over directory links like ~/.config/nvim would write into the old dotfiles/ tree.
 set -Eeuo pipefail
 {{ template "lib.sh" . }}
 

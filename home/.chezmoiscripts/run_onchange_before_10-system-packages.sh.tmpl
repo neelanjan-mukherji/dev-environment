@@ -7,13 +7,10 @@ set -Eeuo pipefail
 step "System packages"
 # shellcheck source=/dev/null
 . /etc/os-release
-case " ${ID:-} ${ID_LIKE:-} " in
-    *" debian "* | *" ubuntu "*) ;;
-    *)
-        record_skip "system packages: ${PRETTY_NAME:-this distro} is not supported yet (planned: milestone 4)"
-        exit 0
-        ;;
-esac
+if ! is_debian_like; then
+    record_skip "system packages: ${PRETTY_NAME:-this distro} is not supported yet (planned: milestone 4)"
+    exit 0
+fi
 
 wanted=({{ range .packages.apt }} {{ . | quote }}{{ end }} )
 missing=()

@@ -48,11 +48,11 @@ Profiles plus per-component overrides; the selection is persisted per machine (c
 ## The `dev` CLI (Go + Charm huh/bubbletea, released via GoReleaser per OS/arch)
 - **Hands-on by default**: every step shows what it will do and the exact command; options run / skip / explain. Interactive moments (browser auth, codes) pause with explicit instructions. Risky actions (wsl.conf, `chsh`, overwriting dotfiles) show a diff or ask first.
 - **Scriptable**: every prompt has a flag/config equivalent — `dev setup --profile minimal --yes`, `--config machine.yaml`. Underneath, answers flow to chezmoi as `DEVENV_*` env vars (milestone 1 `install.sh` uses the same mechanism).
-- **No-sudo guardrails**: detect missing sudo, install what is possible user-locally via mise, report what was skipped.
-- **Failure handling**: continue past a failed component, mark it, print a summary table, write a log to `~/.local/state/dev/`, exit non-zero; `dev setup --resume` retries failures only.
+- **No-sudo guardrails**: detect missing sudo, install what is possible user-locally via mise, report what was skipped (`~/.local/state/dev/skipped.log`).
+- **Failure handling**: continue past a failed component, mark it, print a summary table, write a log to `~/.local/state/dev/` (`failed.log`), exit non-zero; `dev setup --resume` retries failures only.
 - Commands: `setup`, `doctor` (same checks as CI), `update`, `add <tool>`, `profile`, `migrate-v1`.
 - `dev update`: `chezmoi update` + `mise upgrade` (unpinned) + Zinit/lazy.nvim/TPM plugin updates; OS package upgrades only with `--system`. Shells show a ≤ once-daily notice when the repo is behind; never auto-update.
-- `dev migrate-v1` (auto-offered when v1 Stow links are detected): `stow --delete` v1 packages → `chezmoi diff` preview → backup → `chezmoi apply` → verify mise Java/Node → only then remove SDKMAN/nvm (and cargo if unused).
+- `dev migrate-v1` (auto-offered when v1 Stow links are detected; suggests the `full` profile): remove v1 links → `chezmoi diff` preview → backup → `chezmoi apply` → verify mise Java/Node → only then remove SDKMAN/nvm and v1 copies in `~/.local/bin` / `~/.cargo/bin` (the cargo toolchain itself stays: mise's Rust uses `~/.cargo`). Milestone 1's `install.sh` implements this order without Stow (it removes the links directly).
 
 ## Testing
 - Containers: Ubuntu, Debian, Fedora, Arch, Alpine × amd64/arm64, profiles `minimal` and `full`.

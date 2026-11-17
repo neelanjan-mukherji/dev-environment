@@ -1,5 +1,5 @@
 # Base system packages, installed with the OS package manager (needs sudo).
-# Everything else comes from mise (home/dot_config/mise/config.toml.tmpl).
+# Everything else comes from mise (home/private_dot_config/mise/config.toml.tmpl).
 # Milestone 1 supports apt; dnf/pacman/apk/brew/winget lists arrive with their milestones.
 packages:
   apt:
@@ -12,6 +12,7 @@ packages:
     - gnupg
     - less
     - locales
+    - tree
     - unzip
     - xz-utils
     - zip

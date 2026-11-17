@@ -92,6 +92,20 @@ test_components_can_be_added_and_removed_on_top_of_a_profile() {
     has "$f" 'node = "26"'
 }
 
+test_cloud_brings_python_for_azure_cli() {
+    render cloud-python minimal DEVENV_ADD=cloud
+    has .config/mise/config.toml '"pipx:azure-cli"'
+    has .config/mise/config.toml 'python = "3.14"'
+}
+
+test_config_dir_is_not_readable_by_other_users() {
+    # ~/.config holds tokens (gh, cloud CLIs); applying must never widen its mode.
+    render perms minimal
+    local mode
+    mode="$(stat -c %a "$home/.config")"
+    [[ $mode == 700 ]] || { echo "    ~/.config mode is $mode"; return 1; }
+}
+
 test_unknown_component_is_rejected() {
     ! render bad-component dev DEVENV_ADD=nope 2>&1
 }
@@ -115,7 +129,7 @@ test_zsh_starts_cleanly_without_plugins_and_has_shared_aliases() {
 
 test_bash_fallback_has_the_same_aliases_and_functions() {
     render bash minimal
-    shell_in_home bash 'alias gs >/dev/null && alias gco >/dev/null && declare -F y zi >/dev/null && [[ $EDITOR == nvim ]]'
+    shell_in_home bash '[[ :$PATH: == *":$HOME/.local/bin:"* ]] && alias gs >/dev/null && alias gco >/dev/null && declare -F y zi >/dev/null && [[ $EDITOR == nvim ]]'
 }
 
 test_shell_files_are_syntactically_valid() {
@@ -130,8 +144,8 @@ test_v1_version_managers_are_gone_and_mise_is_activated() {
     ! grep -rlE 'sdkman|NVM_DIR' "$home" || { echo "    SDKMAN/nvm references remain"; return 1; }
     has .zshrc 'mise activate zsh'
     has .bashrc 'mise activate bash'
-    has .profile 'mise/shims'
-    has .zshenv 'mise/shims'
+    # Non-interactive shells get mise shims via path.sh (see the PATH order test).
+    has .config/shell/path.sh 'mise/shims'
 }
 
 # Expected hex values come from Catppuccin's published palette, not from our data file.
@@ -186,7 +200,7 @@ render_scripts() {
     local profile="$1"
     local root="$work/scripts-$profile" f out
     mkdir -p "$root/out"
-    DEVENV_PROFILE="$profile" "$CHEZMOI" init --source "$repo" --no-tty --promptDefaults \
+    DEVENV_PROFILE="$profile" DEVENV_NAME=T DEVENV_EMAIL=t@example.com "$CHEZMOI" init --source "$repo" --no-tty --promptDefaults \
         --config "$root/chezmoi.toml" --cache "$root/cache" --persistent-state "$root/state.boltdb" >/dev/null
     for f in "$repo"/home/.chezmoiscripts/*; do
         out="$root/out/$(basename "$f" .tmpl)"
@@ -236,6 +250,108 @@ test_externals_fetch_plugin_managers_and_flavor_theme_files() {
                 ".config/yazi/flavors/catppuccin-latte.yazi/flavor.toml" ".config/eza/theme.yml"; do
         grep -qxF "$want" <<<"$list" || { echo "    externals missing: $want"; printf '%s\n' "$list" | sed 's/^/      /'; return 1; }
     done
+}
+
+test_login_sh_and_zsh_get_the_same_path_order() {
+    render path minimal
+    local want="$home/.local/bin:$home/bin:$home/.local/share/mise/shims:$home/.cargo/bin:/usr/bin:/bin"
+    local sh_path zsh_path
+    sh_path="$(env -i HOME="$home" PATH=/usr/bin:/bin sh -c '. "$HOME/.profile"; echo "$PATH"')"
+    zsh_path="$(env -i HOME="$home" PATH=/usr/bin:/bin zsh -c 'echo "$PATH"')"
+    [[ "$sh_path" == "$want" ]] || { echo "    .profile PATH: $sh_path"; echo "    expected:      $want"; return 1; }
+    [[ "$zsh_path" == "$want" ]] || { echo "    .zshenv PATH:  $zsh_path"; echo "    expected:      $want"; return 1; }
+}
+
+# init_only <name> [env assignments...]: chezmoi init in a fake HOME, no identity
+# preset; prints the generated config.
+init_only() {
+    local root="$work/$1"; shift
+    mkdir -p "$root/fakehome"
+    [[ -f "$root/gitconfig" ]] && cp "$root/gitconfig" "$root/fakehome/.gitconfig"
+    env -u DEVENV_PROFILE -u DEVENV_NAME -u DEVENV_EMAIL -u GH_TOKEN -u GITHUB_TOKEN \
+        HOME="$root/fakehome" XDG_CONFIG_HOME="$root/fakehome/.config" "$@" \
+        "$CHEZMOI" init --source "$repo" --no-tty --promptDefaults \
+        --config "$root/chezmoi.toml" --cache "$root/cache" --persistent-state "$root/state.boltdb" >/dev/null
+    cat "$root/chezmoi.toml"
+}
+
+test_profile_defaults_to_dev_but_full_when_migrating_from_v1() {
+    grep -qx 'profile = "dev"' <<<"$(init_only default-profile)"
+    grep -qx 'profile = "full"' <<<"$(init_only v1-profile DEVENV_DEFAULT_PROFILE=full)"
+}
+
+test_identity_defaults_to_an_existing_github_noreply_address_only() {
+    mkdir -p "$work/noreply" "$work/private"
+    printf '[user]\n\tname = Jane Doe\n\temail = 123+jane@users.noreply.github.com\n' >"$work/noreply/gitconfig"
+    printf '[user]\n\tname = Jane Doe\n\temail = jane@example.org\n' >"$work/private/gitconfig"
+    local cfg
+    cfg="$(init_only noreply)"
+    grep -qx 'email = "123+jane@users.noreply.github.com"' <<<"$cfg" || { echo "$cfg"; return 1; }
+    grep -qx 'name = "Jane Doe"' <<<"$cfg"
+    # A personal address is never offered as the default for public commits.
+    cfg="$(init_only private)"
+    grep -qx 'email = ""' <<<"$cfg" || { echo "$cfg"; return 1; }
+}
+
+test_identity_defaults_also_come_from_an_existing_gitconfig_local() {
+    # v1 machines keep the identity in ~/.gitconfig.local, not always included globally.
+    mkdir -p "$work/local-id/fakehome"
+    printf '[user]\n\tname = Jane Doe\n\temail = 123+jane@users.noreply.github.com\n' >"$work/local-id/fakehome/.gitconfig.local"
+    local cfg
+    cfg="$(init_only local-id)"
+    grep -qx 'name = "Jane Doe"' <<<"$cfg" || { echo "$cfg"; return 1; }
+    grep -qx 'email = "123+jane@users.noreply.github.com"' <<<"$cfg"
+}
+
+# lib_sh '<bash code>': run code after the rendered install-script library, with
+# state in a scratch dir. Prints stdout; stderr goes to $work/lib.err.
+lib_sh() {
+    local root="$work/lib"
+    mkdir -p "$root/state"
+    [[ -f "$root/chezmoi.toml" ]] || DEVENV_PROFILE=minimal DEVENV_NAME=T DEVENV_EMAIL=t@example.com "$CHEZMOI" init --source "$repo" --no-tty --promptDefaults \
+        --config "$root/chezmoi.toml" --cache "$root/cache" --persistent-state "$root/state.boltdb" >/dev/null
+    printf '{{ template "lib.sh" . }}\n%s\n' "$1" |
+        "$CHEZMOI" execute-template --source "$repo" --config "$root/chezmoi.toml" \
+            --cache "$root/cache" --persistent-state "$root/state.boltdb" >"$root/script.sh"
+    XDG_STATE_HOME="$root/state" bash -Eeuo pipefail "$root/script.sh" 2>"$work/lib.err"
+}
+
+test_commands_stay_visible_when_their_output_is_discarded() {
+    lib_sh 'run echo hidden-output >/dev/null'
+    grep -qF '$ echo hidden-output' "$work/lib.err" || { echo "    stderr:"; cat "$work/lib.err"; return 1; }
+}
+
+test_a_failing_step_is_logged_with_its_name() {
+    rm -f "$work/lib/state/dev/failed.log"
+    lib_sh 'step "Frobnicate widgets"; false' && { echo "    expected the step to fail"; return 1; }
+    grep -qF 'Frobnicate widgets' "$work/lib/state/dev/failed.log"
+    # A step that finishes is not logged.
+    rm -f "$work/lib/state/dev/failed.log"
+    lib_sh 'step "Fine"; true'
+    [[ ! -s "$work/lib/state/dev/failed.log" ]]
+}
+
+test_wsl_conf_systemd_is_enabled_without_duplicate_keys() {
+    local out
+    out="$(lib_sh 'printf "[boot]\nsystemd=false\ncommand=echo\n[network]\nhostname=x\n" | wsl_conf_with_systemd')"
+    [[ "$out" == $'[boot]\nsystemd=true\ncommand=echo\n[network]\nhostname=x' ]] || { echo "    got:"; echo "$out"; return 1; }
+    out="$(lib_sh 'printf "[network]\nhostname=x\n" | wsl_conf_with_systemd')"
+    [[ "$out" == $'[network]\nhostname=x\n[boot]\nsystemd=true' ]] || { echo "    got:"; echo "$out"; return 1; }
+    out="$(lib_sh 'printf "[boot]\ncommand=echo\n" | wsl_conf_with_systemd')"
+    [[ "$out" == $'[boot]\nsystemd=true\ncommand=echo' ]] || { echo "    got:"; echo "$out"; return 1; }
+    out="$(lib_sh 'wsl_conf_with_systemd </dev/null')"
+    [[ "$out" == $'[boot]\nsystemd=true' ]] || { echo "    got:"; echo "$out"; return 1; }
+}
+
+test_dry_run_changes_nothing_in_home() {
+    local fake="$work/dry/home"
+    mkdir -p "$fake"
+    printf 'original\n' >"$fake/.zshrc"
+    env HOME="$fake" XDG_CONFIG_HOME="$fake/.config" DEVENV_DIR="$work/dry/nonexistent" \
+        "$repo/install.sh" --dry-run --yes --profile minimal --name T --email t@example.com >/dev/null 2>&1
+    [[ "$(cat "$fake/.zshrc")" == original ]]
+    [[ "$(find "$fake" -mindepth 1 | wc -l)" -eq 1 ]] || { echo "    created:"; find "$fake" -mindepth 1; return 1; }
+    [[ ! -e "$work/dry/nonexistent" ]]
 }
 
 # ---------------------------------------------------------------- run

@@ -1,0 +1,48 @@
+{{- $on := includeTemplate "components" . | splitList "," -}}
+#!/usr/bin/env bash
+# v1 installed tools that mise now provides: SDKMAN, nvm, and binaries copied or
+# linked into ~/.local/bin and ~/.cargo/bin (which come before mise on PATH).
+# Each is removed only after mise proves its replacement works, and only with
+# confirmation. Runs on every apply (so it retries once mise is ready) and is
+# silent when there is nothing left to retire. A "no" is remembered.
+set -Eeuo pipefail
+{{ template "lib.sh" . }}
+
+declined_list="$DEVENV_STATE/retire.declined"
+announced=0
+announce() { [ "$announced" = 1 ] || step "Retire v1 tools replaced by mise"; announced=1; }
+
+# retire <path> <what> <check command...>
+retire() {
+    local path="$1" what="$2"; shift 2
+    [ -e "$path" ] || [ -L "$path" ] || return 0
+    grep -qxF "$path" "$declined_list" 2>/dev/null && return 0
+    announce
+    if ! "$@" >/dev/null 2>&1; then
+        info "Keeping $path ($what): mise has not verified a replacement yet."
+        return 0
+    fi
+    if confirm "mise now provides $what. Remove $path?"; then
+        run rm -rf -- "$path"
+    else
+        assume_yes || ! have_tty || printf '%s\n' "$path" >>"$declined_list"
+        record_skip "removing $path (declined)"
+    fi
+}
+
+# Replaces a v1 copy only when mise's binary is a different file.
+mise_has() { local p; p="$(mise which "$1")" && [ "$p" != "$2" ]; }
+
+for bin in bat fd zoxide jless starship; do
+    retire "$HOME/.local/bin/$bin" "$bin" mise_has "$bin" "$HOME/.local/bin/$bin"
+done
+{{ if has "devtools" $on -}}
+retire "$HOME/.cargo/bin/kondo" "kondo" mise_has kondo "$HOME/.cargo/bin/kondo"
+{{ end -}}
+{{ if has "java" $on -}}
+retire "$HOME/.sdkman" "Java, Maven and Spring Boot (SDKMAN)" mise exec -- java -version
+{{ end -}}
+{{ if has "node" $on -}}
+retire "${NVM_DIR:-$HOME/.nvm}" "Node (nvm)" mise exec -- node --version
+{{ end -}}
+:

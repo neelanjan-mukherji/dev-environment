@@ -44,13 +44,17 @@ alias gb='git branch'
 # Docker and Kubernetes
 # ==========================================
 
-alias d='docker'
-alias dc='docker compose'
-alias dps='docker ps'
+if command -v docker >/dev/null 2>&1; then
+    alias d='docker'
+    alias dc='docker compose'
+    alias dps='docker ps'
+fi
 
-alias k='kubectl'
-alias kgp='kubectl get pods'
-alias kgs='kubectl get svc'
+if command -v kubectl >/dev/null 2>&1; then
+    alias k='kubectl'
+    alias kgp='kubectl get pods'
+    alias kgs='kubectl get svc'
+fi
 
 
 # ==========================================
@@ -66,9 +70,11 @@ alias fzf-dirs='fd --type d --hidden --exclude .git | fzf'
 # Editor
 # ==========================================
 
-alias vim='nvim'
-alias vi='nvim'
-alias vimdiff='nvim -d'
+if command -v nvim >/dev/null 2>&1; then
+    alias vim='nvim'
+    alias vi='nvim'
+    alias vimdiff='nvim -d'
+fi
 
 # The trailing command keeps the file's exit status 0 when the last guarded
 # alias above is skipped.

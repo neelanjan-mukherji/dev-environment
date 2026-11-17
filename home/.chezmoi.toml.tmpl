@@ -4,19 +4,37 @@
 
   Non-interactive: set DEVENV_PROFILE / DEVENV_NAME / DEVENV_EMAIL and pass
   --promptDefaults so anything unset falls back to its default instead of prompting.
+  Defaults: profile "dev" (DEVENV_DEFAULT_PROFILE overrides; install.sh uses "full"
+  when migrating from v1); name and email from the existing git config (global,
+  else ~/.gitconfig.local), but the
+  email only if it is a GitHub noreply address, else from `gh` when logged in.
   Component overrides: DEVENV_ADD / DEVENV_REMOVE (comma-separated) at init time,
   or edit [data.components] in the generated config and re-run `chezmoi init`.
 */ -}}
 {{- $profiles := list "minimal" "dev" "full" -}}
 {{- $profile := env "DEVENV_PROFILE" -}}
 {{- if not $profile -}}
-{{-   $profile = promptChoiceOnce . "profile" "Profile — minimal: shell+editor+CLI tools | dev: +Docker & languages | full: +Kubernetes & Java" $profiles "dev" -}}
+{{-   $profile = promptChoiceOnce . "profile" "Profile — minimal: shell+editor+CLI tools | dev: +Docker & languages | full: +Kubernetes & Java" $profiles (env "DEVENV_DEFAULT_PROFILE" | default "dev") -}}
 {{- end -}}
 {{- if not (has $profile $profiles) }}{{ fail (printf "unknown profile %q (known: %s)" $profile (join ", " $profiles)) }}{{ end -}}
 {{- $name := env "DEVENV_NAME" -}}
-{{- if not $name }}{{ $name = promptStringOnce . "name" "Git author name (blank to skip)" "" }}{{ end -}}
+{{- if not $name -}}
+{{-   $default := "" -}}
+{{-   if not (hasKey . "name") }}{{ $default = output "sh" "-c" "git config --global --get user.name 2>/dev/null || git config --file \"$HOME/.gitconfig.local\" --get user.name 2>/dev/null || true" | trim }}{{ end -}}
+{{-   $name = promptStringOnce . "name" "Git author name (blank to skip)" $default -}}
+{{- end -}}
 {{- $email := env "DEVENV_EMAIL" -}}
-{{- if not $email }}{{ $email = promptStringOnce . "email" "Git author email (GitHub noreply recommended, blank to skip)" "" }}{{ end -}}
+{{- if not $email -}}
+{{-   $default := "" -}}
+{{-   if not (hasKey . "email") -}}
+{{-     $default = output "sh" "-c" "git config --global --get user.email 2>/dev/null || git config --file \"$HOME/.gitconfig.local\" --get user.email 2>/dev/null || true" | trim -}}
+{{-     if and (not (hasSuffix "@users.noreply.github.com" $default)) (lookPath "gh") -}}
+{{-       $default = output "sh" "-c" "gh api user --jq '\"\\(.id)+\\(.login)@users.noreply.github.com\"' 2>/dev/null || true" | trim -}}
+{{-     end -}}
+{{-     if not (hasSuffix "@users.noreply.github.com" $default) }}{{ $default = "" }}{{ end -}}
+{{-   end -}}
+{{-   $email = promptStringOnce . "email" "Git author email (GitHub noreply recommended, blank to skip)" $default -}}
+{{- end -}}
 
 {{- $flavors := list "latte" "frappe" "macchiato" "mocha" -}}
 {{- $flavor := env "DEVENV_THEME" | default (dig "theme" "flavor" "" .) -}}

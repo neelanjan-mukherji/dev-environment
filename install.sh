@@ -40,6 +40,12 @@ info() { printf '    %s\n' "$*"; }
 warn() { printf '\033[1;33m    ! %s\033[0m\n' "$*" >&2; }
 die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Show a root command, then run it (directly when already root).
+as_root() {
+    printf '\033[2m    $ %s\033[0m\n' "$*" >&2
+    if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi
+}
+
 # Run a command, showing its output only if it fails.
 quietly() {
     _log="$(mktemp)"
@@ -87,20 +93,28 @@ esac
     die "Run as your normal user, not root (sudo is used only where needed)."
 
 if [ "$DRY_RUN" = 1 ]; then
-    # A dry run must not touch $HOME: tools and config go to a scratch dir.
+    # A dry run must not change anything: tools, config and state go to a
+    # scratch dir, and nothing is installed with sudo or fetched into $HOME.
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
     BIN_DIR="$tmp/bin"
+    export MISE_DATA_DIR="$tmp/mise/data" MISE_STATE_DIR="$tmp/mise/state" \
+        MISE_CACHE_DIR="$tmp/mise/cache" MISE_CONFIG_DIR="$tmp/mise/config"
 fi
 mkdir -p "$BIN_DIR"
 PATH="$BIN_DIR:$PATH"
 export PATH
 
 if ! command -v git >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
-    say "Installing prerequisites (git, curl)"
+    [ "$DRY_RUN" = 0 ] || die "A dry run needs git and curl; install them first."
     command -v apt-get >/dev/null 2>&1 || die "Install git and curl, then re-run."
-    sudo apt-get update -qq
-    sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates
+    [ "$(id -u)" -eq 0 ] || command -v sudo >/dev/null 2>&1 ||
+        die "git and curl are missing and sudo is not available; install them as root, then re-run."
+    say "Installing prerequisites (git, curl)"
+    ask "Install git, curl and ca-certificates with apt (needs sudo)?" ||
+        die "git and curl are required."
+    as_root apt-get update -qq
+    as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates
 fi
 
 # ------------------------------------------------------------------ source
@@ -111,8 +125,14 @@ if [ -n "$script_dir" ] && [ -f "$script_dir/home/.chezmoi.toml.tmpl" ]; then
     repo="$script_dir"
 elif [ -d "$DEVENV_DIR/.git" ]; then
     repo="$DEVENV_DIR"
-    say "Updating $repo"
-    git -C "$repo" pull --ff-only --quiet || warn "Could not fast-forward $repo; using it as is."
+    if [ "$DRY_RUN" = 0 ]; then
+        say "Updating $repo"
+        git -C "$repo" pull --ff-only --quiet || warn "Could not fast-forward $repo; using it as is."
+    fi
+elif [ "$DRY_RUN" = 1 ]; then
+    say "Cloning $REPO_URL into a scratch dir"
+    git clone --quiet --depth 1 --branch "$REPO_REF" "$REPO_URL" "$tmp/repo"
+    repo="$tmp/repo"
 else
     say "Cloning $REPO_URL into $DEVENV_DIR"
     git clone --quiet --branch "$REPO_REF" "$REPO_URL" "$DEVENV_DIR"
@@ -136,15 +156,39 @@ info "chezmoi $(chezmoi --version | awk '{print $3}' | tr -d ,), mise $(mise --v
 
 # ------------------------------------------------------------------ configure
 
-# Flags without spaces, safe to word-split.
-init_extra=""
-[ "$DEVENV_YES" = 1 ] && init_extra="--promptDefaults --no-tty"
+# chezmoi flags for unattended runs; no spaces inside, safe to word-split.
+prompt_flags=""
+[ "$DEVENV_YES" = 1 ] && prompt_flags="--promptDefaults --no-tty"
+
+# Print the machine's answers; extra args go to chezmoi (e.g. a scratch config).
+show_settings() {
+    chezmoi execute-template "$@" '    profile:    {{ .profile }}
+    components: {{ includeTemplate "components" . | default "none" }}
+    git name:   {{ .name | default "(none)" }}
+    git email:  {{ .email | default "(none)" }}
+    theme:      catppuccin {{ .theme.flavor }}'
+    echo
+}
+
+# v1 (GNU Stow) symlinks into a dotfiles/ tree. A v1 machine had everything that
+# is now the "full" profile, so that becomes the suggested profile.
+has_v1_links() {
+    for f in .zshrc .gitconfig .tmux.conf .config/nvim .config/zsh; do
+        [ -L "$HOME/$f" ] && readlink "$HOME/$f" | grep -q 'dotfiles/' && return 0
+    done
+    return 1
+}
+if [ -z "${DEVENV_PROFILE:-}" ] && has_v1_links; then
+    DEVENV_DEFAULT_PROFILE="${DEVENV_DEFAULT_PROFILE:-full}"
+    export DEVENV_DEFAULT_PROFILE
+fi
 
 if [ "$DRY_RUN" = 1 ]; then
     say "Dry run: rendering with a scratch config; nothing in \$HOME changes"
     set -- --config "$tmp/chezmoi.toml" --persistent-state "$tmp/state.boltdb" --cache "$tmp/cache"
     # shellcheck disable=SC2086
-    chezmoi init --source "$repo" $init_extra "$@"
+    chezmoi init --source "$repo" $prompt_flags "$@"
+    show_settings "$@"
     chezmoi diff "$@" --exclude scripts,externals --no-pager || true
     say "Install scripts that would run"
     chezmoi managed "$@" --include scripts | sed 's/^/    /'
@@ -153,11 +197,31 @@ fi
 
 say "Machine configuration"
 # shellcheck disable=SC2086
-chezmoi init --source "$repo" $init_extra
-chezmoi data --format json 2>/dev/null |
-    awk -F'"' '/"profile"|"flavor"/ { printf "    %s: %s\n", $2, $4 }'
+chezmoi init --source "$repo" $prompt_flags
+show_settings
+# A wrong answer (say, a profile name typed into the name prompt) is cheap to fix
+# now and annoying later, so a person gets to check before anything is applied.
+while [ "$DEVENV_YES" != 1 ] && ! ask "Use these settings?"; do
+    (exec </dev/tty) 2>/dev/null || die "Nobody to ask; pass --profile/--name/--email or --yes."
+    chezmoi init --source "$repo" --prompt
+    show_settings
+done
 
 mkdir -p "$STATE_DIR"
+
+# ------------------------------------------------------------------ migrate v1
+
+# Old Stow links must go before the preview and backup: otherwise both would
+# follow links into the v1 dotfiles/ tree, and applying would write into it.
+if has_v1_links || [ -n "$(find "$HOME/.config" -maxdepth 3 -type l -lname '*dotfiles/*' 2>/dev/null | head -1)" ]; then
+    migrate="$STATE_DIR/migrate-v1.sh"
+    chezmoi execute-template <"$repo/home/.chezmoiscripts/run_before_00-migrate-v1.sh.tmpl" >"$migrate"
+    if ! bash "$migrate"; then
+        rm -f "$migrate"
+        die "The v1 symlinks are still in place, so nothing was applied."
+    fi
+    rm -f "$migrate"
+fi
 
 # ------------------------------------------------------------------ review
 
@@ -185,21 +249,28 @@ fi
 
 # ------------------------------------------------------------------ apply
 
-skipped_before=0
-[ -f "$STATE_DIR/skipped.log" ] && skipped_before="$(wc -l <"$STATE_DIR/skipped.log")"
+lines() { if [ -f "$1" ]; then wc -l <"$1"; else echo 0; fi; }
+# new_entries <log> <lines before>: entries appended during this run.
+new_entries() {
+    _now="$(lines "$1")"
+    [ "$_now" -gt "$2" ] && tail -n "$((_now - $2))" "$1" | cut -f2- | sed 's/^/      - /' >&2
+    return 0
+}
+skipped_before="$(lines "$STATE_DIR/skipped.log")"
+failed_before="$(lines "$STATE_DIR/failed.log")"
 
 status=0
 chezmoi apply --force --keep-going || status=$?
 
 say "Summary"
-skipped_now=0
-[ -f "$STATE_DIR/skipped.log" ] && skipped_now="$(wc -l <"$STATE_DIR/skipped.log")"
-if [ "$skipped_now" -gt "$skipped_before" ]; then
+if [ "$(lines "$STATE_DIR/skipped.log")" -gt "$skipped_before" ]; then
     warn "Skipped this run (details in $STATE_DIR/skipped.log):"
-    tail -n "$((skipped_now - skipped_before))" "$STATE_DIR/skipped.log" | cut -f2- | sed 's/^/      - /' >&2
+    new_entries "$STATE_DIR/skipped.log" "$skipped_before"
 fi
 if [ "$status" -ne 0 ]; then
-    warn "Some steps failed (see above). Fix the cause and re-run; finished steps are not repeated."
+    warn "Failed this run (log: $STATE_DIR/failed.log):"
+    new_entries "$STATE_DIR/failed.log" "$failed_before"
+    warn "Fix the cause and re-run; finished steps are not repeated."
     exit "$status"
 fi
 info "Done. Open a new terminal (or run 'exec zsh'), then 'gh auth login'."
