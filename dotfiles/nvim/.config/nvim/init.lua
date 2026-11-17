@@ -28,3 +28,30 @@ vim.api.nvim_create_autocmd("TextYankPost", { callback = function() vim.highligh
 require("config.lazy")
 require("config.options")
 require("config.keymaps")
+
+-- ==========================================
+-- Windows Clipboard (WSL)
+-- ==========================================
+
+vim.g.clipboard = {
+    name = "Windows Clipboard",
+    copy = {
+        ["+"] = { "clip.exe" },
+        ["*"] = { "clip.exe" },
+    },
+    paste = {
+        ["+"] = {
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "Get-Clipboard -Raw",
+        },
+        ["*"] = {
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "Get-Clipboard -Raw",
+        },
+    },
+    cache_enabled = 0,
+}
