@@ -4,45 +4,41 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Personal workstation provisioning + dotfiles. Currently targets **Ubuntu 24.04 on WSL 2 only** (`install.sh` hard-fails on non-Linux / non-Ubuntu / root). There is no build step and no test suite.
+Personal workstation setup meant to run on every OS. The v2 redesign lives on branch `v2`; `docs/v2-design.md` is the agreed design and milestone plan (read it before structural changes). `v1.0.0` tags the old Ubuntu/WSL-only Stow setup. Milestone 1 (current) supports Ubuntu/Debian incl. WSL.
 
 ## Commands
 
 ```bash
-./install.sh --dry-run            # print every privileged/install step without running it
-./install.sh [--no-docker] [--no-kubernetes] [--no-java] [--no-nvim]
-bash scripts/validate.sh          # `bash -n` syntax check of every *.sh in the repo (the only "test")
-bash bootstrap/stow-dotfiles.sh   # re-link dotfiles only (backs up conflicting real files first)
+make check                    # shellcheck + ci/test-render.sh (fast, no Docker, never touches $HOME)
+make test FILTER=<substring>  # run matching render tests only
+make test-containers          # ci/run-containers.sh: install.sh --yes + ci/verify.sh in clean ubuntu/debian containers
+BASES=debian:13 PROFILES=full make test-containers
+./install.sh --dry-run        # renders against the real $HOME with scratch config/state; changes nothing
 ```
 
-Validate a single script: `bash -n bootstrap/<file>.sh`. Zsh files are not covered by `validate.sh`; check them with `zsh -n <file>`.
+Render tests need `chezmoi`, `shellcheck`, `zsh` and `script` (util-linux) on PATH.
 
 ## Architecture
 
-**Two layers, deliberately separate:**
+- `.chezmoiroot` = `home`, so `home/` is the chezmoi source state. The repo root holds `install.sh`, `ci/`, and `docs/`. chezmoi's `sourceDir` is the clone itself (`~/dev-environment`).
+- **Machine config.** `home/.chezmoi.toml.tmpl` asks once for `profile`, `name` and `email`. Each value can be overridden with an env var: `DEVENV_PROFILE`, `DEVENV_NAME`, `DEVENV_EMAIL`, `DEVENV_ADD`, `DEVENV_REMOVE`, `DEVENV_THEME`. Values already in the existing config are carried over on re-init. Use the env vars rather than `--promptChoice`/`--promptString`, whose keys are the prompt *text*. `install.sh` flags map onto these env vars.
+- **Components.** `home/.chezmoidata/profiles.yaml` maps each profile to its components. `home/.chezmoitemplates/components` computes the effective list (profile + add − remove); templates use it via `includeTemplate "components" . | splitList ","`. Any new component must be added to `$known` in the config template as well.
+- **Packages.** mise installs every tool and language (`home/dot_config/mise/config.toml.tmpl`). The OS package manager installs only the base packages in `home/.chezmoidata/packages.yaml`. Policy: CLI tools use `latest`; toolchains and Neovim are pinned.
+- **Install scripts.** `home/.chezmoiscripts/` holds the install steps; all of them include `.chezmoitemplates/lib.sh`, which provides `step`, `run`, `as_root`, `confirm`, `can_sudo`, `record_skip`.
+  - **Conventions:** echo every system-changing command; `confirm` before risky actions (`DEVENV_YES=1` answers yes); when something is impossible (no sudo, unsupported distro), call `record_skip` and exit 0; exit non-zero only on real failure, so chezmoi retries the script on the next apply.
+  - **Gating:** `run_onchange_` scripts embed a hash of their inputs, which is what makes them re-run. A script that renders to empty is skipped, and that's how OS/component gating works.
+- **Externals.** `home/.chezmoiexternal.toml.tmpl` fetches Zinit, TPM and the Catppuccin theme files, so shell startup never touches the network. `.zshrc` must keep working when Zinit or tools are missing; the render tests assert that.
+- **Shells.** zsh and the bash fallback share `~/.config/shell/{env.sh,aliases.sh,functions.sh}`; those files must stay valid in both shells. zsh-only syntax goes in `~/.config/zsh/aliases.zsh`. Integrations stay guarded with `command -v`.
+- **Theme.** `home/.chezmoidata/catppuccin.yaml` is generated from catppuccin/palette (don't hand-edit it). Templates read `(index .catppuccin .theme.flavor).colors`.
+- **Platform differences.** Detect at runtime where possible (`clipcopy`, `has("wsl")` in nvim, the opener in `aliases.zsh`). Template on `.chezmoi.os` only when runtime detection isn't possible.
 
-1. `install.sh` → `bootstrap/*.sh` (system provisioning). `install.sh` parses flags, exports `REPO_DIR`, `DRY_RUN`, `INSTALL_*`, then invokes each bootstrap script as `run bash <script>`. Dry-run is implemented only by the `run()` wrapper in `install.sh` — it skips the *whole* script, so bootstrap scripts themselves don't check `DRY_RUN`. Each bootstrap script is standalone (`set -Eeuo pipefail`) and should stay idempotent (guard with `command -v … || install`) because the documented update flow is `git pull --ff-only && ./install.sh`.
-2. `dotfiles/<package>/…` (user config), symlinked into `$HOME` by GNU Stow. Each top-level dir under `dotfiles/` is a Stow package whose internal layout mirrors `$HOME` (e.g. `dotfiles/zsh/.config/zsh/aliases.zsh` → `~/.config/zsh/aliases.zsh`). The package list is hardcoded in `bootstrap/stow-dotfiles.sh` (`packages=(…)`); adding a new package directory requires adding it there and to the README's stow commands.
+## Gotchas
 
-Because dotfiles are symlinks, **edits in `~/.config/...` are edits to this repo**. Notably `git config --global` writes into `dotfiles/git/.gitconfig` (that's how the `[user]` block got there).
-
-### Zsh load order
-`.zshenv` (PATH: `~/.local/bin`, `~/bin`, `~/.cargo/bin`) → `.zprofile` (SDKMAN for login shells) → `.zshrc`: bootstraps Zinit if missing → `plugins.zsh` (must load before `compinit`; fzf-tab requirement) → `compinit` → `completion.zsh` → `options history keybindings aliases functions` → zoxide/fzf/starship init → SDKMAN → `~/.zshrc.local` (untracked machine-local overrides; template in `config/environment.example`).
-
-Aliases/integrations are guarded with `command -v` so the shell still works when a tool is missing — keep that pattern.
-
-### Neovim
-`init.lua` sets core options then loads `lua/config/{lazy,options,keymaps}.lua`; plugins are a single spec list in `lua/plugins/init.lua` (lazy.nvim, lockfile committed). Targets Neovim 0.11 native LSP API; Treesitter pinned to `master` branch for 0.11 compatibility. Clipboard is hardwired to `clip.exe`/`powershell.exe` (WSL-specific).
-
-## Platform-specific spots (relevant to any cross-OS work)
-- `install.sh` OS guards; all bootstrap scripts use `apt`/`dpkg --print-architecture`.
-- Debian binary renames handled in `install-cli.sh` (`fdfind`→`fd`, `batcat`→`bat` symlinks in `~/.local/bin`).
-- Neovim WSL clipboard in `init.lua`.
-- Docker requires systemd in WSL; the installer intentionally does **not** edit `/etc/wsl.conf`.
-
-## Known gaps
-- `yazi` and `lazygit` have dotfile packages / shell functions but nothing in `bootstrap/` installs them.
-- Kubernetes apt repo is pinned to `v1.34` in `install-kubernetes.sh`.
+- Files under `$HOME` are rendered copies, not symlinks. Edit `home/` (or use `chezmoi edit`), then run `chezmoi apply`. `git config --global` writes to `~/.gitconfig`, and the next apply reverts it; identity belongs in `~/.gitconfig.local`.
+- `modify_` files (e.g. `btop.conf`, which btop rewrites itself) must **not** have a `.tmpl` suffix; they use the `chezmoi:modify-template` marker.
+- Render-test assertions must hold in an `if`-free subshell (`t()` handles that). Test expectations must come from independent sources, e.g. Catppuccin's published hex values, not our own data files.
+- On the author's WSL machine, an untracked `dotfiles/` copy of v1 is kept (excluded via `.git/info/exclude`) until `run_before_00-migrate-v1` replaces the old Stow symlinks.
 
 ## Constraints
-Repo is meant to be private but must never contain secrets — `.gitignore` blocks keys, `.env`, `.kube/`, `.ssh/`, `*.local`. Machine-specific settings go in `~/.zshrc.local`, not tracked files.
+
+The repo will be public: no identities, secrets or machine-specific values in tracked files. Commit with the GitHub noreply email.

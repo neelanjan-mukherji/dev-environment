@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Test code is passed as strings to child shells on purpose.
+# shellcheck disable=SC2016
 # Render the chezmoi source into a throwaway home for each profile and assert on
 # the produced files. Never touches the real $HOME. Requires: chezmoi, zsh, bash.
 # Usage: ci/test-render.sh [test-name-filter]

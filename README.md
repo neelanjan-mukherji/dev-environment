@@ -1,79 +1,91 @@
 # dev-environment
 
-Reproducible Ubuntu 24.04 on WSL 2 workstation configuration. Configuration is
-tracked in Git, GNU Stow manages symlinks, and `install.sh` provisions packages.
+My workstation setup for every machine: one command installs the shell, editor,
+CLI tools and languages, themed consistently, and re-running it keeps the
+machine in sync.
 
-## Fresh setup
+- **Dotfiles:** [chezmoi](https://chezmoi.io) (source in `home/`)
+- **Tools and languages:** [mise](https://mise.jdx.dev): no root needed, per-project versions
+- **Base packages:** the OS package manager
 
-In elevated Windows PowerShell:
-```powershell
-wsl --install -d Ubuntu-24.04
-```
-Launch Ubuntu, create your Linux user, then:
+> **Status: v2 milestone 1.** Supported today: Ubuntu / Debian, including WSL 2.
+> macOS, Fedora/Arch/Alpine and Windows follow. See [docs/v2-design.md](docs/v2-design.md).
+> The v1 Stow-based setup is tagged `v1.0.0`.
+
+## Install
+
 ```bash
-sudo apt update && sudo apt install -y git curl ca-certificates
-git clone git@github.com:YOUR_GITHUB_USERNAME/dev-environment.git ~/dev-environment
-cd ~/dev-environment
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/neelanjan-mukherji/dev-environment/main/install.sh | sh
 ```
-Create `dev-environment` as a **private** GitHub repository first. Alternatively,
-clone over HTTPS. Never commit credentials, private keys, `.env` files or kubeconfigs.
 
-## Options
+Or from a clone:
+
 ```bash
-./install.sh                  # all components
-./install.sh --dry-run
-./install.sh --no-docker
-./install.sh --no-kubernetes
-./install.sh --no-java
-./install.sh --no-nvim
+git clone https://github.com/neelanjan-mukherji/dev-environment.git ~/dev-environment
+~/dev-environment/install.sh
 ```
 
-After installation, restart the Ubuntu terminal and run `exec zsh`.
-Authenticate with `gh auth login`. Verify with `docker version`, `docker compose
-version`, `kubectl version --client`, `nvim --version`, `sdk version` and `mvn -version`.
+The installer is hands-on:
+1. It asks for a profile and your git identity, once per machine.
+2. It shows which files will change and backs up the existing ones to `~/.dotfiles-backup/<timestamp>/`.
+3. It prints each command before running it, and asks before risky steps (login shell, docker group, `/etc/wsl.conf`, removing SDKMAN/nvm).
 
-## Components
-- Zsh + Zinit, Starship, autosuggestions, fast syntax highlighting, fzf-tab
-- GNU Stow, fzf, zoxide, jq, fd, eza, bat, duf, kondo, jless, ripgrep, tmux
-- GitHub CLI
-- Native Docker Engine, Buildx and Compose plugin
-- kubectl, Helm and k9s (no cluster or credentials are provisioned)
-- SDKMAN, Java 8/17/21/25 (Corretto identifiers resolved at install time), Maven,
-  Spring Boot CLI
-- Neovim + Lazy.nvim, Treesitter, LSP, completion, Telescope, Neo-tree, Git signs,
-  formatting, diagnostics and statusline
+Steps it cannot do, for example without sudo, are skipped and listed at the end rather than failing the run.
 
-## WSL systemd
-Docker's system service requires systemd. If needed, add to `/etc/wsl.conf`:
-```ini
-[boot]
-systemd=true
-```
-Then from Windows PowerShell run `wsl --shutdown`, relaunch Ubuntu, and:
 ```bash
-sudo systemctl enable --now docker
+./install.sh --dry-run                     # show what would change; touches nothing
+./install.sh --yes --profile minimal       # unattended (servers, containers, CI)
+./install.sh --profile dev --add cloud --remove go
+./install.sh --theme latte                 # catppuccin flavor for every tool
 ```
-The installer does not edit `/etc/wsl.conf`. Docker group membership is effectively
-root-equivalent inside Linux; understand the security implication before using it.
 
-## Stow
+### Profiles
+
+| Profile | Adds |
+|---|---|
+| `minimal` | zsh (Zinit) + bash fallback, starship, git, gh, Neovim, tmux, fzf, ripgrep, fd, bat, eza, zoxide, jq, jless, lazygit, yazi, btop, duf |
+| `dev` | + Docker Engine, Node 26, Python 3.14 + uv, Go 1.27, Rust, kondo |
+| `full` | + Corretto 8/17/21/25 (21 default), Maven, Gradle, Spring Boot CLI, kubectl 1.37, Helm, k9s |
+
+Optional component, off in every profile: `cloud` (awscli, gcloud, azure-cli).
+Toolchains are pinned; small CLI tools track `latest`.
+
+### Per-machine settings
+
+Answers live in `~/.config/chezmoi/chezmoi.toml` (`profile`, `name`, `email`,
+`[data.components] add/remove`, `[data.theme] flavor`). Edit it, then run
+`chezmoi init && chezmoi apply`.
+
+Machine-local files that are never tracked: `~/.gitconfig.local` (identity,
+generated), `~/.zshrc.local`, `~/.bashrc.local`, `~/.profile.local`.
+
+## Day to day
+
 ```bash
-cd ~/dev-environment/dotfiles
-stow --restow --target="$HOME" zsh git starship nvim tmux
+chezmoi edit ~/.zshrc      # edit the source in ~/dev-environment/home, then apply
+chezmoi diff               # what would change
+chezmoi apply              # sync this machine with the repo
+chezmoi update             # git pull + apply
+mise upgrade               # newer versions of "latest" tools
+mise use java@corretto-17  # per-project version (writes mise.toml)
 ```
-The installer backs up conflicting regular files to `~/.dotfiles-backup/<timestamp>/`.
-Remove managed links with `stow --delete --target="$HOME" zsh git starship nvim tmux`.
 
-## Java
-SDKMAN manages user-scoped Java and build tools. Inspect available builds with
-`sdk list java`; switch using `sdk use java <identifier>` and persist using
-`sdk default java <identifier>`. The installer resolves Amazon Corretto build
-identifiers dynamically and warns if a requested major is unavailable.
+Projects with `.nvmrc`, `.node-version`, `.java-version` or `.python-version`
+files are honoured automatically.
 
-## Updating
+## WSL notes
+
+- **Docker needs systemd.** If it's off, the installer offers to add
+  `[boot] systemd=true` to `/etc/wsl.conf`. After that, run `wsl.exe --shutdown`
+  from Windows and reopen the terminal.
+- **The docker group is root-equivalent.** Membership lets you run Docker without
+  sudo, but it effectively grants root inside Linux.
+- **Clipboard:** `clip.exe` is used automatically (`clipcopy` in tmux, `has("wsl")` in Neovim).
+
+## Development
+
 ```bash
-git pull --ff-only
-./install.sh
+make check             # shellcheck + render tests (no Docker; never touches $HOME)
+make test FILTER=theme # one render test
+make test-containers   # full install + verify in clean Ubuntu/Debian containers
 ```
-Package upgrades remain an explicit maintenance task (`sudo apt update && sudo apt upgrade`).

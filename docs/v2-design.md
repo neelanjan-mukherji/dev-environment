@@ -16,7 +16,7 @@ One repo that is the go-to setup for every OS and machine, installed and maintai
 ## Repository layout
 - `.chezmoiroot` = `home` — `home/` is the chezmoi source state (dotfiles, templates, run scripts).
 - `cli/` — Go module for the `dev` binary.
-- `packages.yaml` — base system package names per package manager.
+- `home/.chezmoidata/packages.yaml` — base system package names per package manager (inside the source tree so templates can read it).
 - `ci/` — container definitions and verification scripts.
 - `install.sh` / `install.ps1` — fetch the `dev` release binary (checksum-verified) and start `dev setup`.
 - Local clone lives at `~/dev-environment`; chezmoi `sourceDir` points there.
@@ -47,7 +47,7 @@ Profiles plus per-component overrides; the selection is persisted per machine (c
 
 ## The `dev` CLI (Go + Charm huh/bubbletea, released via GoReleaser per OS/arch)
 - **Hands-on by default**: every step shows what it will do and the exact command; options run / skip / explain. Interactive moments (browser auth, codes) pause with explicit instructions. Risky actions (wsl.conf, `chsh`, overwriting dotfiles) show a diff or ask first.
-- **Scriptable**: every prompt has a flag/config equivalent — `dev setup --profile minimal --yes`, `--config machine.yaml`.
+- **Scriptable**: every prompt has a flag/config equivalent — `dev setup --profile minimal --yes`, `--config machine.yaml`. Underneath, answers flow to chezmoi as `DEVENV_*` env vars (milestone 1 `install.sh` uses the same mechanism).
 - **No-sudo guardrails**: detect missing sudo, install what is possible user-locally via mise, report what was skipped.
 - **Failure handling**: continue past a failed component, mark it, print a summary table, write a log to `~/.local/state/dev/`, exit non-zero; `dev setup --resume` retries failures only.
 - Commands: `setup`, `doctor` (same checks as CI), `update`, `add <tool>`, `profile`, `migrate-v1`.

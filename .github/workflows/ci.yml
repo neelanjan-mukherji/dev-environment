@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+    branches: [main, v2]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: shellcheck + render tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install zsh, shellcheck and chezmoi
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zsh shellcheck
+          sh -c "$(curl -fsSL https://get.chezmoi.io)" -- -b "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: make check
+
+  containers:
+    name: install ${{ matrix.base }} / ${{ matrix.profile }}
+    needs: check
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        base: ["ubuntu:24.04", "debian:13"]
+        profile: [minimal, full]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install and verify in a clean container
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROFILES: ${{ matrix.profile }}
+        run: ci/run-containers.sh "${{ matrix.base }}"
