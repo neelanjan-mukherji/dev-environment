@@ -1,0 +1,7 @@
+{{- /* Effective component list for this machine, comma-joined.
+       Use: {{ $on := includeTemplate "components" . | splitList "," }} */ -}}
+{{- $on := list -}}
+{{- range (concat (index .profiles .profile) .components.add) -}}
+{{-   if and (not (has . $.components.remove)) (not (has . $on)) }}{{ $on = append $on . }}{{ end -}}
+{{- end -}}
+{{- join "," $on -}}

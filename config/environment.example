@@ -1,3 +1,0 @@
-# Copy to ~/.zshrc.local and customize. Never commit secrets.
-export WORKSPACE="$HOME/projects"
-export EDITOR="nvim"

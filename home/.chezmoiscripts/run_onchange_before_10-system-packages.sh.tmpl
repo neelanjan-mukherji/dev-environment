@@ -1,0 +1,36 @@
+{{- if eq .chezmoi.os "linux" -}}
+#!/usr/bin/env bash
+# Re-runs when the package list changes: {{ .packages | toJson | sha256sum }}
+set -Eeuo pipefail
+{{ template "lib.sh" . }}
+
+step "System packages"
+# shellcheck source=/dev/null
+. /etc/os-release
+case " ${ID:-} ${ID_LIKE:-} " in
+    *" debian "* | *" ubuntu "*) ;;
+    *)
+        record_skip "system packages: ${PRETTY_NAME:-this distro} is not supported yet (planned: milestone 4)"
+        exit 0
+        ;;
+esac
+
+wanted=({{ range .packages.apt }} {{ . | quote }}{{ end }} )
+missing=()
+for pkg in "${wanted[@]}"; do
+    dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed' || missing+=("$pkg")
+done
+
+if [ "${#missing[@]}" -eq 0 ]; then
+    info "All ${#wanted[@]} base packages already installed."
+    exit 0
+fi
+
+info "Missing: ${missing[*]}"
+if ! can_sudo; then
+    record_skip "system packages (no sudo): ${missing[*]}"
+    exit 0
+fi
+as_root apt-get update -qq
+as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}"
+{{- end }}

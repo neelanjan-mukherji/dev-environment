@@ -1,0 +1,18 @@
+# Base system packages, installed with the OS package manager (needs sudo).
+# Everything else comes from mise (home/dot_config/mise/config.toml.tmpl).
+# Milestone 1 supports apt; dnf/pacman/apk/brew/winget lists arrive with their milestones.
+packages:
+  apt:
+    - bash-completion
+    - build-essential   # compilers for Treesitter parsers and native extensions
+    - ca-certificates
+    - curl
+    - file
+    - git
+    - gnupg
+    - less
+    - locales
+    - unzip
+    - xz-utils
+    - zip
+    - zsh

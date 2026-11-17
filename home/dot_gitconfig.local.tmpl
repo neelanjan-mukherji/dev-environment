@@ -1,0 +1,10 @@
+{{- /* Machine-local git identity; values come from `chezmoi init` answers, never from the repo. */ -}}
+{{- if or .name .email -}}
+[user]
+{{- if .name }}
+	name = {{ .name | quote }}
+{{- end }}
+{{- if .email }}
+	email = {{ .email | quote }}
+{{- end }}
+{{ end -}}

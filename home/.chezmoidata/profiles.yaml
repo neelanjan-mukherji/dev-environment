@@ -1,0 +1,6 @@
+# Components each profile enables. Machines adjust these with
+# [data.components] add/remove (see home/.chezmoi.toml.tmpl).
+profiles:
+  minimal: []
+  dev: [docker, devtools, node, python, go, rust]
+  full: [docker, devtools, node, python, go, rust, kubernetes, java]

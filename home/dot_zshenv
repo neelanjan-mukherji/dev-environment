@@ -1,0 +1,16 @@
+# Read by every zsh (including non-interactive). Keep it fast and side-effect free.
+
+# Ensure PATH contains unique entries.
+typeset -U path PATH
+
+# User-level binaries, then mise shims so non-interactive zsh (scripts, editors)
+# sees mise-managed tools. Interactive shells switch to `mise activate` in .zshrc.
+path=(
+    "$HOME/.local/bin"
+    "$HOME/bin"
+    "$HOME/.cargo/bin"
+    "${XDG_DATA_HOME:-$HOME/.local/share}/mise/shims"
+    $path
+)
+
+export PATH

@@ -1,0 +1,98 @@
+{{- $c := (index .catppuccin .theme.flavor).colors -}}
+# ==========================================
+# General
+# ==========================================
+
+set -g mouse on
+set -g history-limit 100000
+set -g default-terminal "tmux-256color"
+set -as terminal-overrides ",xterm-256color:RGB"
+
+set -g base-index 1
+setw -g pane-base-index 1
+set -g renumber-windows on
+
+set -g escape-time 10
+set -g focus-events on
+set -g set-clipboard on
+
+# ==========================================
+# Status Bar
+# ==========================================
+
+set -g status on
+set -g status-interval 5
+set -g status-position bottom
+
+set -g status-left-length 40
+set -g status-right-length 80
+
+# Catppuccin {{ .theme.flavor }}
+set -g status-style 'bg={{ $c.mantle }},fg={{ $c.text }}'
+set -g status-left '#[bold,fg={{ $c.crust }},bg={{ $c.mauve }}] #S #[default] '
+set -g status-right '#[fg={{ $c.subtext0 }}]%Y-%m-%d #[fg={{ $c.sky }},bold]%H:%M '
+setw -g window-status-format '#[fg={{ $c.overlay1 }}] #I #W '
+setw -g window-status-current-format '#[fg={{ $c.base }},bg={{ $c.peach }},bold] #I #W '
+set -g pane-border-style 'fg={{ $c.surface1 }}'
+set -g pane-active-border-style 'fg={{ $c.mauve }}'
+set -g message-style 'bg={{ $c.surface0 }},fg={{ $c.text }}'
+set -g mode-style 'bg={{ $c.surface1 }},fg={{ $c.text }}'
+
+# ==========================================
+# Keybindings
+# ==========================================
+
+# Keep default prefix: Ctrl+b
+
+# Split panes
+unbind '"'
+unbind %
+
+bind-key v split-window -h
+bind-key s split-window -v
+
+# Navigate panes using Vim keys
+bind-key h select-pane -L
+bind-key j select-pane -D
+bind-key k select-pane -U
+bind-key l select-pane -R
+
+# Resize panes
+bind-key H resize-pane -L 5
+bind-key J resize-pane -D 5
+bind-key K resize-pane -U 5
+bind-key L resize-pane -R 5
+
+# Reload configuration
+bind-key r source-file ~/.tmux.conf \; display-message "tmux config reloaded"
+
+# ==========================================
+# Plugins
+# ==========================================
+
+set -g @plugin 'tmux-plugins/tpm'
+set -g @plugin 'tmux-plugins/tmux-sensible'
+set -g @plugin 'tmux-plugins/tmux-resurrect'
+set -g @plugin 'tmux-plugins/tmux-continuum'
+
+# Session persistence
+set -g @resurrect-capture-pane-contents 'on'
+set -g @continuum-restore 'on'
+set -g @continuum-save-interval '15'
+
+# ==========================================
+# TPM Initialization
+# ==========================================
+
+run '~/.tmux/plugins/tpm/tpm'
+
+# ==========================================
+# Clipboard
+# ==========================================
+
+# OSC 52 covers most modern terminals; `clipcopy` (~/.local/bin) picks the
+# native tool at runtime: clip.exe (WSL), pbcopy (macOS), wl-copy or xclip.
+set -g set-clipboard on
+set -g mode-keys vi
+bind-key -T copy-mode-vi y send-keys -X copy-pipe-and-cancel "clipcopy"
+bind-key -T copy-mode-vi Enter send-keys -X copy-pipe-and-cancel "clipcopy"

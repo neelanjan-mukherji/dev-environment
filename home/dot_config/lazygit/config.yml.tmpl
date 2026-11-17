@@ -1,0 +1,52 @@
+{{- $c := (index .catppuccin .theme.flavor).colors -}}
+# ==========================================
+# Lazygit Configuration
+# ==========================================
+
+gui:
+  nerdFontsVersion: "3"
+  showIcons: true
+  showFileTree: true
+  showRandomTip: false
+  showCommandLog: false
+  showBottomLine: true
+  showPanelJumps: true
+  scrollHeight: 2
+  sidePanelWidth: 0.3333
+  expandFocusedSidePanel: true
+  border: rounded
+  theme:
+    activeBorderColor:
+      - "{{ $c.blue }}"
+      - bold
+    inactiveBorderColor:
+      - "{{ $c.subtext0 }}"
+    optionsTextColor:
+      - "{{ $c.blue }}"
+    selectedLineBgColor:
+      - "{{ $c.surface0 }}"
+    cherryPickedCommitBgColor:
+      - "{{ $c.surface1 }}"
+    cherryPickedCommitFgColor:
+      - "{{ $c.blue }}"
+    unstagedChangesColor:
+      - "{{ $c.red }}"
+    defaultFgColor:
+      - "{{ $c.text }}"
+    searchingActiveBorderColor:
+      - "{{ $c.yellow }}"
+  authorColors:
+    "*": "{{ $c.lavender }}"
+git:
+  autoFetch: true
+  autoRefresh: true
+  pagers:
+    - colorArg: always
+os:
+  edit: "nvim"
+  editAtLine: "nvim --block"
+  open: {{ if eq .chezmoi.os "darwin" }}"open"{{ else }}"xdg-open"{{ end }}
+  openDirInEditor: "nvim"
+update:
+  method: never
+  days: 14

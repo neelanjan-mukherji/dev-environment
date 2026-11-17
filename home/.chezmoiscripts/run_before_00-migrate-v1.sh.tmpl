@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Runs before every apply; does nothing unless v1 GNU Stow symlinks are present.
+set -Eeuo pipefail
+{{ template "lib.sh" . }}
+
+v1_link() { [ -L "$1" ] && readlink "$1" | grep -Eq '(^|/)dotfiles/(zsh|git|tmux|nvim|starship|lazygit|yazi)/'; }
+
+links=()
+for rel in .zshrc .zshenv .zprofile .gitconfig .tmux.conf \
+    .config/zsh .config/git .config/nvim .config/starship.toml .config/lazygit .config/yazi; do
+    target="$HOME/$rel"
+    if v1_link "$target"; then
+        links+=("$target")
+    elif [ -d "$target" ] && [ ! -L "$target" ]; then
+        while IFS= read -r -d '' link; do
+            v1_link "$link" && links+=("$link")
+        done < <(find "$target" -type l -print0)
+    fi
+done
+
+[ "${#links[@]}" -eq 0 ] && exit 0
+
+step "Migrating from v1 (GNU Stow)"
+info "These symlinks point into the old dotfiles/ tree; chezmoi replaces them with managed files:"
+printf '      %s\n' "${links[@]}"
+if ! confirm "Remove these v1 symlinks now?"; then
+    warn "v1 symlinks must be removed before chezmoi can manage these files. Nothing was changed."
+    exit 1
+fi
+run rm -- "${links[@]}"
+info "v1 links removed."

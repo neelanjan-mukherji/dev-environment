@@ -1,0 +1,33 @@
+{{- if eq .chezmoi.os "linux" -}}
+#!/usr/bin/env bash
+set -Eeuo pipefail
+{{ template "lib.sh" . }}
+
+step "Login shell"
+user="$(id -un)"
+zsh_path="$(command -v zsh || true)"
+if [ -z "$zsh_path" ]; then
+    record_skip "login shell: zsh is not installed, the bash fallback stays active"
+    exit 0
+fi
+current="$(getent passwd "$user" | cut -d: -f7)"
+if [ "$current" = "$zsh_path" ]; then
+    info "Already zsh."
+    exit 0
+fi
+if ! confirm "Change the login shell for $user from $current to $zsh_path?"; then
+    record_skip "login shell change (declined); bash fallback stays active"
+    exit 0
+fi
+if ! grep -qxF "$zsh_path" /etc/shells; then
+    can_sudo || { record_skip "login shell: $zsh_path not in /etc/shells and no sudo"; exit 0; }
+    echo "$zsh_path" | as_root tee -a /etc/shells >/dev/null
+fi
+if can_sudo; then
+    as_root chsh -s "$zsh_path" "$user"
+elif have_tty; then
+    run chsh -s "$zsh_path" </dev/tty
+else
+    record_skip "login shell change (needs sudo or your password)"
+fi
+{{- end }}

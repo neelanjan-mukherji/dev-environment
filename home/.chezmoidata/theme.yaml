@@ -1,0 +1,3 @@
+# Theme for every tool. Override per machine with DEVENV_THEME=<flavor> at `chezmoi init`.
+theme:
+  flavor: mocha

@@ -1,0 +1,52 @@
+{{- /*
+  Machine configuration. Rendered by `chezmoi init`; answers are remembered in
+  ~/.config/chezmoi/chezmoi.toml, so re-running init never asks twice.
+
+  Non-interactive: set DEVENV_PROFILE / DEVENV_NAME / DEVENV_EMAIL and pass
+  --promptDefaults so anything unset falls back to its default instead of prompting.
+  Component overrides: DEVENV_ADD / DEVENV_REMOVE (comma-separated) at init time,
+  or edit [data.components] in the generated config and re-run `chezmoi init`.
+*/ -}}
+{{- $profiles := list "minimal" "dev" "full" -}}
+{{- $profile := env "DEVENV_PROFILE" -}}
+{{- if not $profile -}}
+{{-   $profile = promptChoiceOnce . "profile" "Profile — minimal: shell+editor+CLI tools | dev: +Docker & languages | full: +Kubernetes & Java" $profiles "dev" -}}
+{{- end -}}
+{{- if not (has $profile $profiles) }}{{ fail (printf "unknown profile %q (known: %s)" $profile (join ", " $profiles)) }}{{ end -}}
+{{- $name := env "DEVENV_NAME" -}}
+{{- if not $name }}{{ $name = promptStringOnce . "name" "Git author name (blank to skip)" "" }}{{ end -}}
+{{- $email := env "DEVENV_EMAIL" -}}
+{{- if not $email }}{{ $email = promptStringOnce . "email" "Git author email (GitHub noreply recommended, blank to skip)" "" }}{{ end -}}
+
+{{- $flavors := list "latte" "frappe" "macchiato" "mocha" -}}
+{{- $flavor := env "DEVENV_THEME" | default (dig "theme" "flavor" "" .) -}}
+{{- if and $flavor (not (has $flavor $flavors)) }}{{ fail (printf "unknown theme flavor %q (known: %s)" $flavor (join ", " $flavors)) }}{{ end -}}
+
+{{- $known := list "docker" "devtools" "node" "python" "go" "rust" "kubernetes" "java" "cloud" -}}
+{{- $add := dig "components" "add" (list) . -}}
+{{- $remove := dig "components" "remove" (list) . -}}
+{{- with env "DEVENV_ADD" }}{{ $add = splitList "," . }}{{ end -}}
+{{- with env "DEVENV_REMOVE" }}{{ $remove = splitList "," . }}{{ end -}}
+{{- range (concat $add $remove) }}{{ if not (has . $known) }}{{ fail (printf "unknown component %q (known: %s)" . (join ", " $known)) }}{{ end }}{{ end -}}
+
+sourceDir = {{ .chezmoi.workingTree | quote }}
+
+[data]
+profile = {{ $profile | quote }}
+name = {{ $name | quote }}
+email = {{ $email | quote }}
+
+[data.components]
+# Applied on top of the profile. Known: {{ join ", " $known }}
+add = [{{ range $i, $c := $add }}{{ if $i }}, {{ end }}{{ $c | quote }}{{ end }}]
+remove = [{{ range $i, $c := $remove }}{{ if $i }}, {{ end }}{{ $c | quote }}{{ end }}]
+
+{{- if $flavor }}
+
+[data.theme]
+# Catppuccin flavor for every tool on this machine (default from .chezmoidata/theme.yaml).
+flavor = {{ $flavor | quote }}
+{{- end }}
+
+[diff]
+exclude = ["scripts"]

@@ -1,0 +1,41 @@
+# Bash fallback: used when zsh is unavailable or broken. Shares aliases,
+# functions, environment and integrations with zsh via ~/.config/shell/.
+
+case $- in *i*) ;; *) return ;; esac
+
+# ==========================================
+# History and options
+# ==========================================
+
+HISTFILE="${XDG_STATE_HOME:-$HOME/.local/state}/bash/history"
+mkdir -p "$(dirname "$HISTFILE")"
+HISTSIZE=50000
+HISTFILESIZE=50000
+HISTCONTROL=ignoreboth:erasedups
+shopt -s histappend checkwinsize cdspell autocd globstar 2>/dev/null
+
+if [ -r /usr/share/bash-completion/bash_completion ]; then
+    . /usr/share/bash-completion/bash_completion
+fi
+
+# ==========================================
+# mise and shared configuration
+# ==========================================
+
+command -v mise >/dev/null && eval "$(mise activate bash)"
+
+. "$HOME/.config/shell/env.sh"
+. "$HOME/.config/shell/aliases.sh"
+. "$HOME/.config/shell/functions.sh"
+
+# ==========================================
+# Shell Integrations
+# ==========================================
+
+command -v zoxide >/dev/null && eval "$(zoxide init bash)"
+command -v fzf >/dev/null && eval "$(fzf --bash)"
+command -v starship >/dev/null && eval "$(starship init bash)"
+
+# Local overrides
+[ -f "$HOME/.bashrc.local" ] && . "$HOME/.bashrc.local"
+:

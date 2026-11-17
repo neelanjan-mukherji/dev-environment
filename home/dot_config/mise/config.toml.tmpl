@@ -1,0 +1,75 @@
+{{- $on := includeTemplate "components" . | splitList "," -}}
+# Managed by chezmoi from ~/dev-environment (profile: {{ .profile }}). Edit the source, not this file.
+# Policy: small CLI tools track "latest"; toolchains are pinned and bumped deliberately.
+
+[settings]
+# Honour per-project .nvmrc / .node-version / .java-version / .python-version files.
+idiomatic_version_file_enable_tools = ["node", "java", "python"]
+
+[tools]
+# ---- core CLI (every profile)
+bat = "latest"
+btop = "latest"
+duf = "latest"
+eza = "latest"
+fd = "latest"
+fzf = "latest"
+gh = "latest"
+jless = "latest"
+jq = "latest"
+lazygit = "latest"
+# Pinned: config targets the Neovim 0.11 LSP API and nvim-treesitter master.
+neovim = "0.11"
+ripgrep = "latest"
+starship = "latest"
+tmux = "latest"
+yazi = "latest"
+zoxide = "latest"
+{{- if has "devtools" $on }}
+
+# ---- devtools
+"github:tbillington/kondo" = "latest"
+{{- end }}
+{{- if has "node" $on }}
+
+# ---- node
+node = "26"
+{{- end }}
+{{- if has "python" $on }}
+
+# ---- python
+python = "3.14"
+uv = "latest"
+{{- end }}
+{{- if has "go" $on }}
+
+# ---- go
+go = "1.27"
+{{- end }}
+{{- if has "rust" $on }}
+
+# ---- rust
+rust = "stable"
+{{- end }}
+{{- if has "java" $on }}
+
+# ---- java (first entry is the default; switch per project with .java-version or `mise use`)
+java = ["corretto-21", "corretto-25", "corretto-17", "corretto-8"]
+maven = "latest"
+gradle = "latest"
+spring-boot = "latest"
+{{- end }}
+{{- if has "kubernetes" $on }}
+
+# ---- kubernetes
+kubectl = "1.37"
+helm = "latest"
+k9s = "latest"
+{{- end }}
+{{- if has "cloud" $on }}
+
+# ---- cloud
+awscli = "latest"
+gcloud = "latest"
+"pipx:azure-cli" = "latest"
+{{- end }}

@@ -1,0 +1,60 @@
+# ==========================================
+# Interactive Shell Guard
+# ==========================================
+
+[[ -o interactive ]] || return
+
+# ==========================================
+# mise: puts every managed CLI tool and language on PATH
+# ==========================================
+
+command -v mise >/dev/null && eval "$(mise activate zsh)"
+
+# ==========================================
+# Zinit (provisioned by chezmoi; the shell still works without it)
+# ==========================================
+
+ZINIT_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/zinit/zinit.git"
+
+if [[ -r "$ZINIT_HOME/zinit.zsh" ]]; then
+    source "$ZINIT_HOME/zinit.zsh"
+    # Load plugins before initializing completion.
+    source "$HOME/.config/zsh/plugins.zsh"
+fi
+
+# ==========================================
+# Completion
+# ==========================================
+
+autoload -Uz compinit
+ZCOMPDUMP="${XDG_CACHE_HOME:-$HOME/.cache}/zsh/zcompdump"
+mkdir -p "${ZCOMPDUMP:h}"
+compinit -d "$ZCOMPDUMP"
+
+source "$HOME/.config/zsh/completion.zsh"
+
+# ==========================================
+# Modular Configuration
+# ==========================================
+
+for config in options history keybindings; do
+    source "$HOME/.config/zsh/$config.zsh"
+done
+unset config
+
+source "$HOME/.config/shell/env.sh"
+source "$HOME/.config/shell/aliases.sh"
+source "$HOME/.config/zsh/aliases.zsh"
+source "$HOME/.config/shell/functions.sh"
+
+# ==========================================
+# Shell Integrations
+# ==========================================
+
+command -v zoxide >/dev/null && eval "$(zoxide init zsh)"
+command -v fzf >/dev/null && eval "$(fzf --zsh)"
+command -v starship >/dev/null && eval "$(starship init zsh)"
+
+# Local overrides
+[[ -f "$HOME/.zshrc.local" ]] && source "$HOME/.zshrc.local"
+return 0
