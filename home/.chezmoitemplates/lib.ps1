@@ -10,6 +10,15 @@
 #   Step name; chezmoi retries the script on the next apply.
 
 $ErrorActionPreference = 'Stop'
+# Started from PowerShell 7, Windows PowerShell inherits its PSModulePath and then
+# fails loading 7's type data on the first module it imports. Use its own default.
+if ($PSVersionTable.PSEdition -eq 'Desktop') {
+    $env:PSModulePath = @(
+        (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell\Modules'),
+        (Join-Path $env:ProgramFiles 'WindowsPowerShell\Modules'),
+        (Join-Path $PSHOME 'Modules')
+    ) -join ';'
+}
 $DevState = Join-Path $HOME '.local\state\dev'
 New-Item -ItemType Directory -Force -Path $DevState | Out-Null
 $script:DevStep = 'install script'

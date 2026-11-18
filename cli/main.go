@@ -16,6 +16,13 @@ import (
 var version = "dev"
 
 func main() {
+	if runtime.GOOS == "windows" {
+		// Started from PowerShell 7, dev inherits its PSModulePath; Windows
+		// PowerShell children (chezmoi's scripts, doctor's checks) then load 7's
+		// type data and fail ("The member ... is already present"). Unset, each
+		// PowerShell builds its own default.
+		os.Unsetenv("PSModulePath")
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	code := app.Main(ctx, os.Args[1:], os.Stdout, os.Stderr, app.Deps{Runner: sys.Exec{}, Prompter: ui.Terminal{}, Version: version, OS: runtime.GOOS})
 	stop()
