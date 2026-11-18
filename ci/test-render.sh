@@ -12,7 +12,8 @@ CHEZMOI="${CHEZMOI:-chezmoi}"
 # The dev binary (`make build`); the bootstrap and dry-run tests run it.
 DEV="${DEV:-$repo/cli/dist/dev}"
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+# Go makes its module cache read-only; make everything writable so it can go.
+trap 'chmod -R u+w "$work" 2>/dev/null; rm -rf "$work"' EXIT
 
 pass=0 fail=0 failed=()
 
@@ -855,7 +856,8 @@ while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done
 printf '#!/bin/sh\necho "fake dev $*"\n' >"$out" && chmod +x "$out"
 MISE
     chmod +x "$h/.local/bin/mise"
-    out="$(env -i HOME="$h" PATH=/usr/bin:/bin sh "$repo/install.sh" --from-source --yes 2>&1)" || { echo "$out"; return 1; }
+    # No Go anywhere on PATH (CI runners have one in /usr/bin).
+    out="$(env -i HOME="$h" PATH="$(system_without go gofmt)" sh "$repo/install.sh" --from-source --yes 2>&1)" || { echo "$out"; return 1; }
     grep -q "^exec go@$want -- go build" "$h/mise-args" || { cat "$h/mise-args"; return 1; }
     grep -q "fake dev setup --source $repo --yes" <<<"$out" || { echo "$out"; return 1; }
 }
