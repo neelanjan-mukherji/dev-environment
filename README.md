@@ -6,10 +6,10 @@ machine in sync.
 
 - **Dotfiles:** [chezmoi](https://chezmoi.io) (source in `home/`)
 - **Tools and languages:** [mise](https://mise.jdx.dev): no root needed, per-project versions
-- **Base packages:** the OS package manager
+- **Base packages:** the OS package manager (apt, Homebrew)
 
-> **Status: v2 milestone 2.** Supported today: Ubuntu / Debian, including WSL 2.
-> macOS, Fedora/Arch/Alpine and Windows follow. See [docs/v2-design.md](docs/v2-design.md).
+> **Status: v2 milestone 3.** Supported today: Ubuntu / Debian (including WSL 2)
+> and macOS. Fedora/Arch/Alpine and Windows follow. See [docs/v2-design.md](docs/v2-design.md).
 > The v1 Stow-based setup is tagged `v1.0.0`.
 
 ## Install
@@ -69,7 +69,7 @@ yes: true
 | Profile | Adds |
 |---|---|
 | `minimal` | zsh (Zinit) + bash fallback, starship, git, gh, Neovim, tmux, fzf, ripgrep, fd, bat, eza, zoxide, jq, jless, lazygit, yazi, btop, duf |
-| `dev` | + Docker Engine, Node 26, Python 3.14 + uv, Go 1.27, Rust, kondo |
+| `dev` | + Docker (Engine on Linux, Colima on macOS), Node 26, Python 3.14 + uv, Go 1.27, Rust, kondo |
 | `full` | + Corretto 8/17/21/25 (21 default), Maven, Gradle, Spring Boot CLI, kubectl 1.37, Helm, k9s |
 
 Optional component, off in every profile: `cloud` (awscli, gcloud, azure-cli).
@@ -106,6 +106,18 @@ most once a day; `DEVENV_NO_UPDATE_CHECK=1` turns that off).
 
 Projects with `.nvmrc`, `.node-version`, `.java-version` or `.python-version`
 files are honoured automatically.
+
+## macOS notes
+
+- **Homebrew** installs the base packages, [WezTerm](https://wezterm.org) and
+  JetBrainsMono Nerd Font. If Homebrew is missing, setup offers its official
+  installer (it asks for your password and installs the Command Line Tools).
+- **Docker without Docker Desktop:** the docker CLI with [Colima](https://github.com/abiosoft/colima)
+  as the engine. Setup offers to start it now and at login (`brew services start colima`).
+- **WezTerm:** themed like everything else; left Option is Meta, right Option
+  still types symbols.
+- macOS's `path_helper` reorders PATH for login shells; `~/.zprofile` puts
+  `~/.local/bin` and the mise shims back in front.
 
 ## WSL notes
 

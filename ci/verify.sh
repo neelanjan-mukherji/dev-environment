@@ -37,9 +37,11 @@ fi
 # ---- idempotency: a second run changes nothing and re-runs no install step
 second="$("$dev" setup --yes --source "$repo" 2>&1)"
 check "second install succeeds"   test $? -eq 0
-# Step headers are coloured; strip the escapes before matching.
+# Step headers are coloured; strip the escapes before matching. A literal ESC,
+# because BSD sed (macOS) does not understand \x1b.
+esc=$'\033'
 # shellcheck disable=SC2001  # needs a regex
-second_plain="$(sed 's/\x1b\[[0-9;]*m//g' <<<"$second")"
+second_plain="$(sed "s/${esc}\\[[0-9;]*m//g" <<<"$second")"
 check "second install is a no-op" bash -c '! grep -E "==> (System packages|CLI tools|Docker Engine|Login shell|Theme caches|Retire)" <<<"$1"' _ "$second_plain"
 check "update check runs" bash -c '"$1" update --check && [ -s "${XDG_STATE_HOME:-$HOME/.local/state}/dev/update-check" ]' _ "$dev"
 check "no step failed" test ! -s "${XDG_STATE_HOME:-$HOME/.local/state}/dev/failed.log"

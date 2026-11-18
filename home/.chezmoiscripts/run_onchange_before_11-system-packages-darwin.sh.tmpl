@@ -1,0 +1,23 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/usr/bin/env bash
+# macOS base packages with Homebrew. Re-runs when the lists change:
+# {{ dict "brew" .packages.brew "casks" .packages.brew_casks | toJson | sha256sum }}
+# Runs under macOS's /bin/bash 3.2 the first time: no bash 4 features.
+set -Eeuo pipefail
+{{ template "lib.sh" . }}
+
+step "Homebrew and base packages"
+if ! find_brew; then
+    # The official installer asks for your password and installs the Command Line Tools.
+    info "Homebrew is not installed (https://brew.sh)."
+    if ! confirm "Install Homebrew with its official installer (needs your password)?"; then
+        record_skip "Homebrew (declined): base packages, WezTerm and the font are not installed"
+        exit 0
+    fi
+    if assume_yes; then export NONINTERACTIVE=1; fi
+    run /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    find_brew || { warn "Homebrew installed but brew was not found"; exit 1; }
+fi
+brew_install{{ range .packages.brew }} {{ . | quote }}{{ end }}
+brew_install --cask{{ range .packages.brew_casks }} {{ . | quote }}{{ end }}
+{{- end }}

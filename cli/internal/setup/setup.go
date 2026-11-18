@@ -29,6 +29,7 @@ type Deps struct {
 	Runner   sys.Runner
 	Prompter Prompter
 	Out      io.Writer
+	OS       string // runtime.GOOS unless a test says otherwise
 }
 
 type run struct {
@@ -120,6 +121,9 @@ func newRun(d Deps, o Options) (*run, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
+	}
+	if d.OS == "" {
+		d.OS = runtime.GOOS
 	}
 	r := &run{Deps: d, opts: o, ui: newUI(d.Out), home: home, state: stateDir(home), bin: filepath.Join(home, ".local/bin")}
 	prependPath(r.bin, filepath.Join(home, ".local/share/mise/shims"))
@@ -246,12 +250,10 @@ func (r *run) confirm(q Question, explain func()) (bool, error) {
 // ------------------------------------------------------------------ steps
 
 func (r *run) preflight() error {
-	switch runtime.GOOS {
-	case "linux":
-	case "darwin":
-		return errors.New("macOS support arrives in milestone 3")
+	switch r.OS {
+	case "linux", "darwin":
 	default:
-		return fmt.Errorf("unsupported OS %s; on Windows, run dev inside WSL", runtime.GOOS)
+		return fmt.Errorf("unsupported OS %s; on Windows, run dev inside WSL", r.OS)
 	}
 	if os.Geteuid() == 0 && os.Getenv("DEVENV_ALLOW_ROOT") != "1" {
 		return errors.New("run as your normal user, not root (sudo is used only where needed)")
@@ -260,6 +262,18 @@ func (r *run) preflight() error {
 }
 
 func (r *run) prerequisites(ctx context.Context) error {
+	if r.OS == "darwin" {
+		// macOS ships curl; git is a stub until the Command Line Tools are installed.
+		if _, err := r.sh(ctx, "git --version"); err == nil {
+			return nil
+		}
+		r.ui.step("Installing the Command Line Tools (git, compilers)")
+		r.ui.command("xcode-select --install")
+		if err := r.attached(ctx, nil, "xcode-select", "--install"); err != nil {
+			r.ui.warn("xcode-select --install: " + err.Error())
+		}
+		return errors.New("finish installing the Command Line Tools in the window that opened, then run this again")
+	}
 	if _, err := r.sh(ctx, "command -v git && command -v curl"); err == nil {
 		return nil
 	}

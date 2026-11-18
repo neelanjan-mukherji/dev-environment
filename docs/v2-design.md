@@ -61,8 +61,8 @@ Profiles plus per-component overrides; the selection is persisted per machine (c
 
 ## Milestones (each tagged and merged to `main` when green)
 1. ✅ **Foundation** (`v2.0.0-alpha.1`) — chezmoi restructure, `packages.yaml`, mise, v1 parity on Ubuntu/WSL, bash fallback, theme, container CI (Ubuntu/Debian). Migrate this machine.
-2. **`dev` CLI** — guided setup, doctor, update, migrate-v1, `--yes`/`--config`, GoReleaser, `install.sh`.
-3. **macOS** — Homebrew, Colima, WezTerm + font, macOS CI.
+2. ✅ **`dev` CLI** — guided setup, doctor, update, migrate-v1, `--yes`/`--config`, GoReleaser, `install.sh`.
+3. **macOS** — Homebrew, Colima, WezTerm + font, macOS CI. (Built; the macOS CI job is its only real-machine check so far.)
 4. **More Linux** — Fedora, Arch, Alpine minimal, no-sudo mode, arm64 CI.
 5. **Windows** — `install.ps1`, winget, WSL + systemd, Windows Terminal, PowerShell profile, Windows CI.
 6. **Desktop component** (low priority) — VS Code, OS tweaks.

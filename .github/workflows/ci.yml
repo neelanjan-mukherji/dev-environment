@@ -46,3 +46,31 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROFILES: ${{ matrix.profile }}
         run: ci/run-containers.sh "${{ matrix.base }}"
+
+  macos:
+    name: install macOS / ${{ matrix.profile }}
+    needs: check
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [minimal, full]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+      - name: Build dev
+        run: cd cli && CGO_ENABLED=0 go build -trimpath -o dist/dev .
+      - name: Install
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MISE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEVENV_DEV_BIN: ${{ github.workspace }}/cli/dist/dev
+        run: ./install.sh --yes --profile ${{ matrix.profile }} --name 'CI User' --email ci@example.com
+      - name: Verify
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MISE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ci/verify.sh

@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"runtime"
 
 	"github.com/neelanjan-mukherji/dev-environment/cli/internal/app"
 	"github.com/neelanjan-mukherji/dev-environment/cli/internal/sys"
@@ -16,7 +17,7 @@ var version = "dev"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	code := app.Main(ctx, os.Args[1:], os.Stdout, os.Stderr, app.Deps{Runner: sys.Exec{}, Prompter: ui.Terminal{}, Version: version})
+	code := app.Main(ctx, os.Args[1:], os.Stdout, os.Stderr, app.Deps{Runner: sys.Exec{}, Prompter: ui.Terminal{}, Version: version, OS: runtime.GOOS})
 	stop()
 	os.Exit(code)
 }

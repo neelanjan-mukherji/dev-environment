@@ -135,8 +135,21 @@ func (r *run) check(ctx context.Context, repo string) error {
 }
 
 func (r *run) upgradeSystem(ctx context.Context) error {
+	if r.OS == "darwin" {
+		ok, err := r.confirm(Question{Text: "Upgrade Homebrew packages (brew upgrade)?"}, nil)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errStop
+		}
+		if err := r.attached(ctx, nil, "brew", "update"); err != nil {
+			return err
+		}
+		return r.attached(ctx, nil, "brew", "upgrade")
+	}
 	if _, err := r.sh(ctx, "command -v apt-get"); err != nil {
-		return errors.New("only apt is supported so far")
+		return errors.New("only apt and Homebrew are supported so far")
 	}
 	ok, err := r.confirm(Question{Text: "Upgrade OS packages with apt (needs sudo)?"}, nil)
 	if err != nil {

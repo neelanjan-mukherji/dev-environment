@@ -23,6 +23,7 @@ type Machine struct {
 	Components []string
 	Email      string
 	Flavor     string // catppuccin flavor, e.g. "mocha"
+	OS         string // chezmoi's .chezmoi.os: "linux", "darwin"
 	State      string // ~/.local/state/dev
 }
 
@@ -31,6 +32,7 @@ const machineTemplate = `{{ .profile }}
 {{ includeTemplate "components" . }}
 {{ .email }}
 {{ .theme.flavor }}
+{{ .chezmoi.os }}
 `
 
 // ReadMachine asks chezmoi for this machine's configuration.
@@ -40,10 +42,10 @@ func ReadMachine(ctx context.Context, r sys.Runner) (Machine, error) {
 		return Machine{}, fmt.Errorf("reading the machine config with chezmoi (has setup run?): %w\n%s", err, out)
 	}
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	for len(lines) < 4 {
+	for len(lines) < 5 {
 		lines = append(lines, "")
 	}
-	m := Machine{Profile: lines[0], Email: lines[2], Flavor: lines[3], State: stateDir()}
+	m := Machine{Profile: lines[0], Email: lines[2], Flavor: lines[3], OS: lines[4], State: stateDir()}
 	if lines[1] != "" {
 		m.Components = strings.Split(lines[1], ",")
 	}
@@ -80,6 +82,10 @@ type Check struct {
 
 func zsh(name, script string) Check  { return Check{Name: name, Shell: interactiveZsh, Script: script} }
 func bash(name, script string) Check { return Check{Name: name, Shell: plainBash, Script: script} }
+
+// loginShellIsZsh reads the login shell the way the install step does
+// (getent on Linux, Directory Services on macOS).
+const loginShellIsZsh = `u="$(id -un)"; if command -v getent >/dev/null; then getent passwd "$u" | cut -d: -f7; else dscl . -read "/Users/$u" UserShell | awk '{print $2}'; fi | grep -q zsh`
 
 // shellQuote quotes s for a POSIX shell.
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
@@ -135,7 +141,7 @@ func Checks(m Machine) []Check {
 		bash("neovim plugins restored", `test -d "$HOME/.local/share/nvim/lazy/telescope.nvim"`),
 		zsh("bat theme compiled", "bat --list-themes | grep -q "+shellQuote("Catppuccin "+title(m.Flavor))),
 		Check{Name: "bash fallback has tools + aliases", Shell: interactiveBash, Script: `command -v starship && command -v rg && alias gs`},
-		Check{Name: "login shell is zsh", Shell: plainBash, Script: `getent passwd "$(id -un)" | cut -d: -f7 | grep -q zsh`,
+		Check{Name: "login shell is zsh", Shell: plainBash, Script: loginShellIsZsh,
 			Skipped: skippedStep(m.State, "login shell", "login-shell.declined")},
 	)
 	if m.Email != "" {
@@ -150,6 +156,15 @@ func Checks(m Machine) []Check {
 			}
 		} else if c.mise {
 			cs = append(cs, zsh("mise does not manage "+c.name, "! mise which "+c.tools[0]))
+		}
+	}
+	if m.OS == "darwin" {
+		cs = append(cs,
+			bash("WezTerm installed", `test -d /Applications/WezTerm.app || test -d "$HOME/Applications/WezTerm.app" || command -v wezterm`),
+			bash("JetBrainsMono Nerd Font installed", `ls "$HOME/Library/Fonts" /Library/Fonts 2>/dev/null | grep -qi 'JetBrainsMonoNerdFont'`),
+		)
+		if on("docker") {
+			cs = append(cs, zsh("zsh has colima", "command -v colima"))
 		}
 	}
 	if on("node") {

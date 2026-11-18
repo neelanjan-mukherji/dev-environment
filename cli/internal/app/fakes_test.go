@@ -115,8 +115,14 @@ func (p *fakePrompter) EditSettings(s setup.Settings) (setup.Settings, error) {
 
 func run(t *testing.T, r *fakeRunner, p *fakePrompter, args ...string) (string, int) {
 	t.Helper()
+	return runOn(t, "linux", r, p, args...)
+}
+
+// runOn runs dev as if on goos ("linux", "darwin").
+func runOn(t *testing.T, goos string, r *fakeRunner, p *fakePrompter, args ...string) (string, int) {
+	t.Helper()
 	var out bytes.Buffer
-	deps := app.Deps{Runner: r, Prompter: p}
+	deps := app.Deps{Runner: r, Prompter: p, OS: goos}
 	if p == nil {
 		deps.Prompter = nobody{}
 	}

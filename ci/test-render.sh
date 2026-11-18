@@ -27,7 +27,7 @@ render() {
         --config "$root/chezmoi.toml" --cache "$root/cache" --persistent-state "$root/state.boltdb" >/dev/null
     "$CHEZMOI" apply --source "$repo" --no-tty --force \
         --config "$root/chezmoi.toml" --cache "$root/cache" --persistent-state "$root/state.boltdb" \
-        --destination "$home" --exclude scripts,externals
+        --destination "$home" --exclude scripts,externals ${RENDER_OS:+--override-data "{\"chezmoi\":{\"os\":\"$RENDER_OS\"}}"}
 }
 
 has()     { grep -qF -- "$2" "$home/$1" || { echo "    expected '$1' to contain: $2"; return 1; }; }
@@ -171,6 +171,28 @@ test_shells_say_once_a_day_when_the_repo_is_behind_and_never_update() {
     done
 }
 
+test_macos_gets_wezterm_with_the_theme_and_nerd_font_and_linux_does_not() {
+    RENDER_OS=darwin render wezterm-mac minimal DEVENV_THEME=macchiato
+    has .config/wezterm/wezterm.lua 'config.color_scheme = "Catppuccin Macchiato"'
+    has .config/wezterm/wezterm.lua 'JetBrainsMono Nerd Font'
+    render wezterm-linux minimal
+    [[ ! -e "$home/.config/wezterm" ]] || { echo "    wezterm config rendered on linux"; return 1; }
+}
+
+test_path_order_survives_a_system_reordering_like_macos_path_helper() {
+    # /etc/zprofile's path_helper runs after ~/.zshenv and puts the system first;
+    # ~/.zprofile sources path.sh again, which must move our dirs back to the front.
+    render path-helper minimal
+    exists .zprofile
+    has .zprofile '.config/shell/path.sh'
+    local want="$home/.local/bin:$home/bin:$home/.local/share/mise/shims:$home/.cargo/bin:/usr/bin:/bin"
+    local reordered="/usr/bin:/bin:$home/.cargo/bin:$home/.local/bin" sh got
+    for sh in sh zsh bash; do
+        got="$(env -i HOME="$home" PATH="$reordered" "$sh" -c '. "$HOME/.config/shell/path.sh"; echo "$PATH"')"
+        [[ "$got" == "$want" ]] || { echo "    $sh: $got"; echo "    want: $want"; return 1; }
+    done
+}
+
 test_shell_files_are_syntactically_valid() {
     render syntax full
     cd "$home"
@@ -235,28 +257,63 @@ test_btop_keeps_its_own_settings_and_only_the_theme_line_is_managed() {
 }
 
 # Render each install script for a profile; prints "<name>\t<rendered path>".
+# render_scripts <profile> [os]: every install script rendered for that profile
+# (and OS, default this one); prints "name<TAB>path" per script.
 render_scripts() {
-    local profile="$1"
-    local root="$work/scripts-$profile" f out
+    local profile="$1" os="${2:-}"
+    local root="$work/scripts-$profile-${os:-here}" f out
+    local override=()
+    [[ -n "$os" ]] && override=(--override-data "{\"chezmoi\":{\"os\":\"$os\"}}")
     mkdir -p "$root/out"
     DEVENV_PROFILE="$profile" DEVENV_NAME=T DEVENV_EMAIL=t@example.com "$CHEZMOI" init --source "$repo" --no-tty --promptDefaults \
         --config "$root/chezmoi.toml" --cache "$root/cache" --persistent-state "$root/state.boltdb" >/dev/null
     for f in "$repo"/home/.chezmoiscripts/*; do
         out="$root/out/$(basename "$f" .tmpl)"
-        "$CHEZMOI" execute-template --source "$repo" --config "$root/chezmoi.toml" \
-            --cache "$root/cache" --persistent-state "$root/state.boltdb" <"$f" >"$out"
-        printf '%s\t%s\n' "$(basename "$out")" "$out"
+        if "$CHEZMOI" execute-template --source "$repo" --config "$root/chezmoi.toml" \
+            --cache "$root/cache" --persistent-state "$root/state.boltdb" "${override[@]}" <"$f" >"$out" 2>"$out.err"; then
+            printf '%s\t%s\n' "$(basename "$out")" "$out"
+        else
+            printf '!render-failed:%s\t%s\n' "$(basename "$f")" "$out.err"
+        fi
     done
 }
 
 test_install_scripts_pass_shellcheck_for_every_profile() {
-    local p name out
-    for p in minimal dev full; do
-        while IFS=$'\t' read -r name out; do
-            [[ -n "$(tr -d '[:space:]' <"$out")" ]] || continue   # chezmoi skips empty scripts
-            shellcheck -s bash "$out" || { echo "    shellcheck failed: $p/$name"; return 1; }
-        done < <(render_scripts "$p")
+    local p os name out
+    for os in linux darwin; do
+        for p in minimal dev full; do
+            while IFS=$'\t' read -r name out; do
+                [[ "$name" != '!render-failed'* ]] || { echo "    $os/$p: ${name#!render-failed:}"; cat "$out"; return 1; }
+                [[ -n "$(tr -d '[:space:]' <"$out")" ]] || continue   # chezmoi skips empty scripts
+                shellcheck -s bash "$out" || { echo "    shellcheck failed: $os/$p/$name"; return 1; }
+            done < <(render_scripts "$p" "$os")
+        done
     done
+}
+
+# rendered_names <profile> <os>: the install scripts that are not empty there.
+rendered_names() {
+    local name out
+    while IFS=$'\t' read -r name out; do
+        [[ "$name" != '!render-failed'* ]] || { echo "$name"; continue; }
+        if [[ -n "$(tr -d '[:space:]' <"$out")" ]]; then echo "$name"; fi
+    done < <(render_scripts "$1" "$2")
+}
+
+test_each_os_gets_its_own_package_and_docker_steps() {
+    local mac linux
+    mac="$(rendered_names dev darwin)"
+    linux="$(rendered_names dev linux)"
+    printf 'darwin:\n%s\nlinux:\n%s\n' "$mac" "$linux"   # shown if an assertion fails
+    grep -q 'system-packages-darwin' <<<"$mac"
+    grep -q 'docker-darwin' <<<"$mac"
+    grep -qE 'system-packages\.sh|docker\.sh' <<<"$mac" && return 1   # no apt steps on macOS
+    grep -qE 'system-packages\.sh' <<<"$linux"
+    grep -q darwin <<<"$linux" && return 1
+    # Both get the login shell step; minimal macOS gets no Docker.
+    grep -q login-shell <<<"$mac"
+    grep -q login-shell <<<"$linux"
+    ! grep -q docker <<<"$(rendered_names minimal darwin)"
 }
 
 test_docker_script_only_runs_when_docker_component_is_enabled() {

@@ -1,6 +1,6 @@
 # Base system packages, installed with the OS package manager (needs sudo).
 # Everything else comes from mise (home/private_dot_config/mise/config.toml.tmpl).
-# Milestone 1 supports apt; dnf/pacman/apk/brew/winget lists arrive with their milestones.
+# apt (Debian/Ubuntu) and Homebrew (macOS); dnf/pacman/apk/winget lists arrive with their milestones.
 packages:
   apt:
     - bash-completion
@@ -17,3 +17,14 @@ packages:
     - xz-utils
     - zip
     - zsh
+  # macOS: Homebrew formulae. The Command Line Tools (compilers, git) come with Homebrew.
+  brew:
+    - bash              # a current bash for the install scripts and the fallback shell
+    - git
+    - gnupg
+    - tree
+    - xz
+  # macOS: Homebrew casks (apps and fonts).
+  brew_casks:
+    - font-jetbrains-mono-nerd-font
+    - wezterm

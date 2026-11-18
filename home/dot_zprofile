@@ -1,0 +1,3 @@
+# Read by login zsh after /etc/zprofile. On macOS that runs path_helper, which
+# puts the system directories in front of ours; restore the order.
+. "$HOME/.config/shell/path.sh"

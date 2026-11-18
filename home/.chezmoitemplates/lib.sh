@@ -64,6 +64,44 @@ can_sudo() {
 
 is_wsl() { grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; }
 
+# login_shell [user]: the user's login shell (getent on Linux, Directory Services on macOS).
+login_shell() {
+    local user="${1:-$(id -un)}"
+    if command -v getent >/dev/null 2>&1; then
+        getent passwd "$user" | cut -d: -f7
+    else
+        dscl . -read "/Users/$user" UserShell 2>/dev/null | awk '{print $2}'
+    fi
+}
+
+# find_brew: puts Homebrew on PATH if it is installed; false otherwise.
+find_brew() {
+    local b
+    for b in "$(command -v brew 2>/dev/null)" /opt/homebrew/bin/brew /usr/local/bin/brew; do
+        if [ -n "$b" ] && [ -x "$b" ]; then
+            eval "$("$b" shellenv)"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# brew_install <formula|--cask cask>...: installs what is missing, one call.
+brew_install() {
+    local kind=--formula missing=() have
+    if [ "${1:-}" = --cask ]; then kind=--cask; shift; fi
+    have="$(brew list "$kind" -1 2>/dev/null || true)"
+    local pkg
+    for pkg in "$@"; do
+        grep -qxF "$pkg" <<<"$have" || missing+=("$pkg")
+    done
+    if [ "${#missing[@]}" -eq 0 ]; then
+        info "Already installed ($kind): $*"
+        return 0
+    fi
+    run brew install "$kind" "${missing[@]}"
+}
+
 # True on Debian, Ubuntu and their derivatives (apt-based).
 is_debian_like() {
     # shellcheck source=/dev/null

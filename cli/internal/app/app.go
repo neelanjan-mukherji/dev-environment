@@ -21,6 +21,7 @@ type Deps struct {
 	Runner   sys.Runner
 	Prompter setup.Prompter
 	Version  string
+	OS       string // runtime.GOOS; tests set it to play another OS
 }
 
 // errFailed means the command already reported what went wrong; exit non-zero quietly.
@@ -163,7 +164,7 @@ Nothing updates by itself: shells show a notice at most once a day when the
 repo is behind (that check is ` + "`dev update --check`" + `).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return setup.Update(cmd.Context(), uo, setup.Deps{Runner: d.Runner, Prompter: d.Prompter, Out: cmd.OutOrStdout()})
+			return setup.Update(cmd.Context(), uo, d.setupDeps(cmd))
 		},
 	}
 	f := cmd.Flags()
@@ -174,7 +175,7 @@ repo is behind (that check is ` + "`dev update --check`" + `).`,
 }
 
 func (d Deps) setupDeps(cmd *cobra.Command) setup.Deps {
-	return setup.Deps{Runner: d.Runner, Prompter: d.Prompter, Out: cmd.OutOrStdout()}
+	return setup.Deps{Runner: d.Runner, Prompter: d.Prompter, Out: cmd.OutOrStdout(), OS: d.OS}
 }
 
 func profileCmd(d Deps) *cobra.Command {

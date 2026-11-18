@@ -1,6 +1,6 @@
 {{- if eq .chezmoi.os "linux" -}}
 #!/usr/bin/env bash
-# Re-runs when the package list changes: {{ .packages | toJson | sha256sum }}
+# Re-runs when the package list changes: {{ .packages.apt | toJson | sha256sum }}
 set -Eeuo pipefail
 {{ template "lib.sh" . }}
 

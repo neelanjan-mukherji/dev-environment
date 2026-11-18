@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Personal workstation setup meant to run on every OS. The v2 redesign lives on branch `v2`; `docs/v2-design.md` is the agreed design and milestone plan (read it before structural changes). `v1.0.0` tags the old Ubuntu/WSL-only Stow setup. Milestone 1 (Ubuntu/Debian incl. WSL) is done; milestone 2 adds the `dev` CLI.
+Personal workstation setup meant to run on every OS. The v2 redesign lives on branch `v2`; `docs/v2-design.md` is the agreed design and milestone plan (read it before structural changes). `v1.0.0` tags the old Ubuntu/WSL-only Stow setup. Milestones 1 (Ubuntu/Debian incl. WSL) and 2 (the `dev` CLI) are done; milestone 3 adds macOS.
 
 ## Commands
 
@@ -41,7 +41,8 @@ Render tests need `chezmoi`, `shellcheck`, `zsh` and `script` (util-linux) on PA
 - **PATH** is defined once in `~/.config/shell/path.sh`, sourced by `.zshenv`, `.profile`, `.bashrc` and lib.sh.
 - **Shells.** zsh and the bash fallback share `~/.config/shell/{env.sh,aliases.sh,functions.sh}`; those files must stay valid in both shells. zsh-only syntax goes in `~/.config/zsh/aliases.zsh`. Integrations stay guarded with `command -v`.
 - **Theme.** `home/.chezmoidata/catppuccin.yaml` is generated from catppuccin/palette (don't hand-edit it). Templates read `(index .catppuccin .theme.flavor).colors`.
-- **Platform differences.** Detect at runtime where possible (`clipcopy`, `has("wsl")` in nvim, the opener in `aliases.zsh`). Template on `.chezmoi.os` only when runtime detection isn't possible.
+- **Platform differences.** Detect at runtime where possible (`clipcopy`, `has("wsl")` in nvim, the opener in `aliases.zsh`, `login_shell` in lib.sh). Template on `.chezmoi.os` only when runtime detection isn't possible. OS-specific install steps are separate scripts gated on `.chezmoi.os` (`*-darwin.sh.tmpl` beside the apt ones); OS-specific targets go in `home/.chezmoiignore`. In Go, `Deps.OS` replaces `runtime.GOOS` so tests can play macOS (`runOn`).
+- **macOS.** Install scripts first run under `/bin/bash` 3.2 (Homebrew's bash arrives with the first step): no bash 4 features, and no empty-array expansion under `set -u`. BSD tools: no `sed -i`, `\x1b` or `getent`. Render tests cover darwin with `RENDER_OS=darwin render …` and `render_scripts <profile> darwin` (chezmoi `--override-data`); there is no local macOS run, so the `macos` CI job is the real check.
 
 ## Gotchas
 

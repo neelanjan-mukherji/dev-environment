@@ -14,7 +14,11 @@ func machine(profile, components, email string) rule {
 }
 
 func machineWith(profile, components, email, flavor string) rule {
-	return rule{match: "execute-template", out: profile + "\n" + components + "\n" + email + "\n" + flavor + "\n"}
+	return machineOn("linux", profile, components, email, flavor)
+}
+
+func machineOn(goos, profile, components, email, flavor string) rule {
+	return rule{match: "execute-template", out: profile + "\n" + components + "\n" + email + "\n" + flavor + "\n" + goos + "\n"}
 }
 
 const fullComponents = "docker,devtools,node,python,go,rust,kubernetes,java"

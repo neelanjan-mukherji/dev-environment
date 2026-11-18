@@ -1,0 +1,30 @@
+{{- $on := includeTemplate "components" . | splitList "," -}}
+{{- if and (eq .chezmoi.os "darwin") (has "docker" $on) -}}
+#!/usr/bin/env bash
+# Docker on macOS without Docker Desktop: the docker CLI with Colima as the engine.
+set -Eeuo pipefail
+{{ template "lib.sh" . }}
+
+step "Docker (Colima)"
+if ! find_brew; then
+    record_skip "docker: Homebrew is not installed"
+    exit 0
+fi
+brew_install colima docker docker-compose docker-buildx
+
+# The CLI finds compose and buildx as plugins in ~/.docker/cli-plugins.
+prefix="$(brew --prefix)"
+run mkdir -p "$HOME/.docker/cli-plugins"
+for plugin in docker-compose docker-buildx; do
+    run ln -sfn "$prefix/opt/$plugin/bin/$plugin" "$HOME/.docker/cli-plugins/$plugin"
+done
+
+if colima status >/dev/null 2>&1; then
+    info "Colima is running."
+elif confirm "Start Colima now and at every login (brew services)?"; then
+    # Colima needs virtualization; some hosts (nested VMs, CI runners) don't have it.
+    run brew services start colima || record_skip "docker: Colima could not be started; run 'colima start' to see why"
+else
+    record_skip "docker: Colima not started; run 'colima start' (or 'brew services start colima')"
+fi
+{{- end }}

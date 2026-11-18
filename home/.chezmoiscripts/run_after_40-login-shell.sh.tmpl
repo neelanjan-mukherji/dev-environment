@@ -1,4 +1,3 @@
-{{- if eq .chezmoi.os "linux" -}}
 #!/usr/bin/env bash
 # Runs on every apply so a skipped change (no sudo yet) is retried; silent once
 # zsh is the login shell. A "no" is remembered until the marker file is deleted.
@@ -7,7 +6,7 @@ set -Eeuo pipefail
 
 user="$(id -un)"
 zsh_path="$(command -v zsh || true)"
-current="$(getent passwd "$user" | cut -d: -f7)"
+current="$(login_shell "$user")"
 declined="$DEVENV_STATE/login-shell.declined"
 [ -n "$zsh_path" ] && [ "$(basename "$current")" = zsh ] && exit 0
 [ -f "$declined" ] && exit 0
@@ -29,11 +28,13 @@ if ! grep -qxF "$zsh_path" /etc/shells; then
     can_sudo || { record_skip "login shell: $zsh_path not in /etc/shells and no sudo"; exit 0; }
     echo "$zsh_path" | as_root tee -a /etc/shells >/dev/null
 fi
-if can_sudo; then
+if [ "$(uname -s)" = Darwin ] && have_tty; then
+    # macOS: chsh changes your own shell after asking for your password.
+    run chsh -s "$zsh_path" </dev/tty
+elif can_sudo; then
     as_root chsh -s "$zsh_path" "$user"
 elif have_tty; then
     run chsh -s "$zsh_path" </dev/tty
 else
     record_skip "login shell change (needs sudo or your password)"
 fi
-{{- end }}
