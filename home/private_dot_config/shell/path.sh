@@ -27,7 +27,8 @@ case "$PATH" in
             done
         done
         _rest="${_rest#:}"
-        PATH="$_devenv_front${_rest:+:${_rest%:}}"
+        _rest="${_rest%:}"
+        PATH="$_devenv_front${_rest:+:$_rest}"
         ;;
 esac
 unset _devenv_front _dir _list _rest

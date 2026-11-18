@@ -1,0 +1,53 @@
+{{- if eq .chezmoi.os "darwin" -}}
+#!/usr/bin/env bash
+# macOS base packages with Homebrew. Runs on every apply so a skipped or declined
+# Homebrew install is offered again; silent when everything is installed (the
+# no-op check in ci/verify.sh relies on that).
+# Runs under macOS's /bin/bash 3.2 on a fresh Mac: no bash 4 features.
+set -Eeuo pipefail
+{{ template "lib.sh" . }}
+
+formulae=({{ range .packages.brew }} {{ . | quote }}{{ end }} )
+casks=({{ range .packages.brew_casks }} {{ . | quote }}{{ end }} )
+
+# missing_from <list flag> <names...>: the names brew does not list as installed.
+missing_from() {
+    local kind="$1" have name
+    shift
+    have="$(brew list "$kind" -1 2>/dev/null || true)"
+    for name in "$@"; do
+        grep -qxF "$name" <<<"$have" || echo "$name"
+    done
+}
+
+if find_brew && [ -z "$(missing_from --formula "${formulae[@]}")$(missing_from --cask "${casks[@]}")" ]; then
+    exit 0
+fi
+
+step "Homebrew and base packages"
+if ! find_brew; then
+    # The official installer asks for your password and installs the Command Line Tools.
+    info "Homebrew is not installed (https://brew.sh)."
+    if ! confirm "Install Homebrew with its official installer (needs your password)?"; then
+        record_skip "Homebrew (declined): base packages, WezTerm and the font are not installed"
+        exit 0
+    fi
+    # Unattended only when sudo works without a password; otherwise the installer
+    # asks for it on the terminal, and with nobody there it is skipped.
+    if sudo -n true 2>/dev/null; then
+        export NONINTERACTIVE=1
+    elif ! have_tty; then
+        record_skip "Homebrew needs your password: run 'dev setup' in a terminal"
+        exit 0
+    fi
+    # Downloaded first, so a failed download stops here (lib.sh's EXIT trap
+    # records it) instead of running an empty script.
+    installer="$(mktemp)"
+    run curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o "$installer"
+    if have_tty; then run /bin/bash "$installer" </dev/tty; else run /bin/bash "$installer"; fi
+    rm -f "$installer"
+    find_brew || { warn "Homebrew installed but brew was not found"; exit 1; }
+fi
+brew_install "${formulae[@]}"
+brew_install --cask "${casks[@]}"
+{{- end }}

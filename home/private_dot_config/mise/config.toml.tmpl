@@ -22,7 +22,9 @@ lazygit = "latest"
 neovim = "0.11"
 ripgrep = "latest"
 starship = "latest"
-tmux = "latest"
+{{- if ne .chezmoi.os "darwin" }}
+tmux = "latest" # macOS: Homebrew (packages.yaml)
+{{- end }}
 yazi = "latest"
 zoxide = "latest"
 {{- if has "devtools" $on }}

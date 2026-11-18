@@ -22,6 +22,7 @@ packages:
     - bash              # a current bash for the install scripts and the fallback shell
     - git
     - gnupg
+    - tmux              # mise's tmux would build from source on macOS
     - tree
     - xz
   # macOS: Homebrew casks (apps and fonts).

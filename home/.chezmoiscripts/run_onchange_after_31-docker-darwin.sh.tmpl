@@ -22,8 +22,19 @@ done
 if colima status >/dev/null 2>&1; then
     info "Colima is running."
 elif confirm "Start Colima now and at every login (brew services)?"; then
-    # Colima needs virtualization; some hosts (nested VMs, CI runners) don't have it.
-    run brew services start colima || record_skip "docker: Colima could not be started; run 'colima start' to see why"
+    # Colima needs virtualization; some hosts (nested VMs, CI runners) don't have
+    # it. launchd accepts the service either way, so wait for the VM itself.
+    run brew services start colima || true
+    started=0
+    for _ in $(seq 1 30); do
+        if colima status >/dev/null 2>&1; then started=1; break; fi
+        sleep 4
+    done
+    if [ "$started" = 1 ]; then
+        info "Colima is running."
+    else
+        record_skip "docker: Colima did not start (no virtualization?); run 'colima start' to see why"
+    fi
 else
     record_skip "docker: Colima not started; run 'colima start' (or 'brew services start colima')"
 fi
