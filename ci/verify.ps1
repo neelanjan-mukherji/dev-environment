@@ -10,15 +10,20 @@ function Check([string]$Name, [bool]$Ok, [string]$Detail = '') {
     if ($Ok) { Write-Host "ok   $Name" } else { Write-Host "FAIL $Name"; if ($Detail) { $Detail -split "`n" | ForEach-Object { "    $_" } }; $script:fail++ }
 }
 
-dev doctor
+# dev from PATH, else the build CI handed install.ps1 (DEVENV_DEV_BIN is used in place).
+$dev = (Get-Command dev -ErrorAction SilentlyContinue).Source
+if (-not $dev) { $dev = Join-Path $repo 'cli\dist\dev.exe' }
+
+& $dev doctor
 Check 'dev doctor' ($LASTEXITCODE -eq 0)
 
-$second = (dev setup --yes --source $repo 2>&1 | Out-String)
-Check 'second install succeeds' ($LASTEXITCODE -eq 0) $second
+$second = (& $dev setup --yes --source $repo 2>&1 | Out-String)
+$secondOk = $LASTEXITCODE -eq 0
+Check 'second install succeeds' $secondOk $second
 # Step headers of the install scripts; dev's own steps (WSL etc.) print every run.
 $plain = $second -replace ([string][char]27 + '\[[0-9;]*m'), ''
 $reran = $plain -split "`n" | Where-Object { $_ -match '==> (winget packages|XDG_CONFIG_HOME|PowerShell profile|Neovim plugins|Windows Terminal)' }
-Check 'second install is a no-op' (-not $reran) ($reran -join "`n")
+Check 'second install is a no-op' ($secondOk -and -not $reran) ($reran -join "`n")
 
 Write-Host "---- $fail failed"
 exit [int]($fail -gt 0)
