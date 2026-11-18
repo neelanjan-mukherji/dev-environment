@@ -532,6 +532,24 @@ test_bootstrap_installs_a_verified_release_and_hands_over_to_setup() {
     grep -qx "fake dev: setup --source $repo --from-nowhere --yes" <<<"$out" || { echo "$out"; return 1; }
 }
 
+test_bootstrap_from_source_builds_with_mise_when_go_is_not_on_path() {
+    # A v1 machine has Go installed by mise but no shims on PATH.
+    local h="$work/from-source" out want
+    want="$(sed -n 's/^go //p' "$repo/cli/go.mod")"
+    mkdir -p "$h/.local/bin"
+    cat >"$h/.local/bin/mise" <<'MISE'
+#!/bin/sh
+# Fake: "mise exec go@V -- go build ... -o OUT ." writes a dev that reports its args.
+echo "$*" >"$HOME/mise-args"
+while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done
+printf '#!/bin/sh\necho "fake dev $*"\n' >"$out" && chmod +x "$out"
+MISE
+    chmod +x "$h/.local/bin/mise"
+    out="$(env -i HOME="$h" PATH=/usr/bin:/bin sh "$repo/install.sh" --from-source --yes 2>&1)" || { echo "$out"; return 1; }
+    grep -q "^exec go@$want -- go build" "$h/mise-args" || { cat "$h/mise-args"; return 1; }
+    grep -q "fake dev setup --source $repo --yes" <<<"$out" || { echo "$out"; return 1; }
+}
+
 test_bootstrap_refuses_a_release_whose_checksum_does_not_match() {
     local root="$work/boot-bad" out
     fake_release "$root/release"

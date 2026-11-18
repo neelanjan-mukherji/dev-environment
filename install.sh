@@ -5,11 +5,11 @@
 #   curl -fsSL https://raw.githubusercontent.com/neelanjan-mukherji/dev-environment/main/install.sh | sh
 #   ./install.sh                                   # from a clone: guided
 #   ./install.sh --yes --profile minimal           # unattended
-#   ./install.sh --from-source                     # build dev from this clone (needs Go)
+#   ./install.sh --from-source                     # build dev from this clone (Go, or mise)
 #
 # Every other option goes to `dev setup`. Where dev comes from:
 #   DEVENV_DEV_BIN=<path>   use this binary (CI builds it on the host)
-#   --from-source           go build ./cli from this clone
+#   --from-source           go build ./cli from this clone (Go from PATH, else via mise)
 #   otherwise               the newest GitHub release for this OS/arch, checked
 #                           against the release's checksums.txt
 # DEVENV_DEV_VERSION pins a release tag; DEVENV_RELEASE_URL replaces the download
@@ -32,7 +32,7 @@ for arg in "$@"; do
 Usage: install.sh [--from-source] [dev setup options]
 
 Puts the `dev` CLI in ~/.local/bin, then runs `dev setup` with the options.
-  --from-source   build dev from this clone (needs Go) instead of downloading
+  --from-source   build dev from this clone (with Go, or Go through mise) instead of downloading
 Where dev comes from otherwise:
   DEVENV_DEV_BIN=<path>    use this binary
   DEVENV_DEV_VERSION=<tag> this release instead of the newest one
@@ -98,10 +98,21 @@ if [ -n "${DEVENV_DEV_BIN:-}" ]; then
     dev="$DEVENV_DEV_BIN"
 elif [ "$from_source" = 1 ]; then
     [ -n "$clone" ] || die "--from-source needs a clone: git clone https://github.com/$REPO && ./dev-environment/install.sh --from-source"
-    command -v go >/dev/null 2>&1 || die "--from-source needs Go on PATH."
+    # Go from PATH, else through mise (which installs the go.mod version if missing).
+    mise="$(command -v mise 2>/dev/null || true)"
+    [ -n "$mise" ] || [ ! -x "$HOME/.local/bin/mise" ] || mise="$HOME/.local/bin/mise"
+    gover="$(sed -n 's/^go //p' "$clone/cli/go.mod")"
+    if command -v go >/dev/null 2>&1; then
+        go_build() { go build "$@"; }
+    elif [ -n "$mise" ]; then
+        say "Go is not on PATH; using go@$gover through mise"
+        go_build() { "$mise" exec "go@$gover" -- go build "$@"; }
+    else
+        die "--from-source needs Go or mise on PATH (https://go.dev/dl or https://mise.jdx.dev)."
+    fi
     say "Building dev from $clone/cli"
     mkdir -p "$BIN_DIR"
-    (cd "$clone/cli" && CGO_ENABLED=0 go build -trimpath -o "$BIN_DIR/dev" .)
+    (cd "$clone/cli" && export CGO_ENABLED=0 && go_build -trimpath -o "$BIN_DIR/dev" .)
     dev="$BIN_DIR/dev"
 else
     download
