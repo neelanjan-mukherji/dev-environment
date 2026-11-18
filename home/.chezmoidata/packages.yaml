@@ -64,6 +64,7 @@ packages:
     - build-base
     - ca-certificates
     - curl
+    - eza               # no arm64 musl build for mise
     - file
     - git
     - gnupg
@@ -71,6 +72,7 @@ packages:
     - less
     - ncurses           # terminfo for tmux and nvim
     - neovim            # 0.11 on Alpine 3.22
+    - ripgrep           # no arm64 musl build for mise
     - shadow            # chsh, for the login shell step
     - tree
     - unzip

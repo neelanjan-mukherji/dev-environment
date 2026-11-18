@@ -121,9 +121,16 @@ jobs:
       - name: Install winget
         shell: pwsh
         run: |
-          Install-PackageProvider -Name NuGet -Force | Out-Null
-          Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery | Out-Null
+          # PSResourceGet ships with PowerShell 7.4+ (no NuGet provider step needed).
+          Install-PSResource -Name Microsoft.WinGet.Client -Repository PSGallery -TrustRepository -Quiet
+          Import-Module Microsoft.WinGet.Client
           Repair-WinGetPackageManager -AllUsers -Latest
+          # winget is an app alias in WindowsApps, which a Server PATH may lack.
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+            $apps = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
+            $env:Path = "$apps;$env:Path"
+            Add-Content -Path $env:GITHUB_PATH -Value $apps
+          }
           winget --version
       - name: Install
         shell: pwsh

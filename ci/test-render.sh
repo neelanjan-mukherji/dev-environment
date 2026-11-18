@@ -593,7 +593,9 @@ test_alpine_gets_neovim_and_jless_from_apk_not_mise() {
         --persistent-state "$work/alpine/state.boltdb" --destination "$home" --exclude scripts,externals --override-data "$alpine"
     lacks .config/mise/config.toml 'neovim ='
     lacks .config/mise/config.toml 'jless ='
-    has .config/mise/config.toml 'ripgrep = "latest"'
+    lacks .config/mise/config.toml 'ripgrep ='
+    lacks .config/mise/config.toml 'eza ='
+    has .config/mise/config.toml 'fd = "latest"'
     # Elsewhere mise keeps them.
     render not-alpine minimal
     has .config/mise/config.toml 'neovim = "0.11"'
