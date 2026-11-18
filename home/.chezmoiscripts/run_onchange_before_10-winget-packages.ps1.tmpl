@@ -1,0 +1,39 @@
+# Re-runs when the package list changes: {{ .packages.winget | toJson | sha256sum }}
+{{ template "lib.ps1" . }}
+
+Step 'winget packages'
+if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+    Add-Skip 'winget packages: winget is missing (install App Installer from the Microsoft Store)'
+    exit 0
+}
+$wanted = @(
+{{- range .packages.winget }}
+    @{ Id = {{ .id | squote }}; Version = {{ dig "version" "" . | squote }}; Pin = {{ dig "pin" "" . | squote }} }
+{{- end }}
+)
+$missing = @()
+foreach ($p in $wanted) {
+    if (-not (Test-Native winget list --id $p.Id --exact --accept-source-agreements --disable-interactivity)) { $missing += $p }
+}
+if ($missing.Count -eq 0) {
+    Info "All $($wanted.Count) packages already installed (winget)."
+} else {
+    Info ('Missing: ' + (($missing | ForEach-Object { $_.Id }) -join ', '))
+    Info 'Some installers ask for admin rights (a UAC prompt).'
+    foreach ($p in $missing) {
+        $install = @('install', '--id', $p.Id, '--exact', '--source', 'winget', '--silent',
+            '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity')
+        if ($p.Version) { $install += @('--version', $p.Version) }
+        Write-Host ("    `$ winget {0}" -f ($install -join ' ')) -ForegroundColor DarkGray
+        winget @install
+        # Already there under another source (e.g. Windows Terminal from the Store):
+        # APPINSTALLER_CLI_ERROR_PACKAGE_ALREADY_INSTALLED / UPDATE_NOT_APPLICABLE.
+        if ($LASTEXITCODE -in @(0, -1978335135, -1978335189)) { continue }
+        throw "winget install $($p.Id) exited with $LASTEXITCODE"
+    }
+}
+# Pins keep `winget upgrade --all` (dev update --system) within a version range.
+foreach ($p in ($wanted | Where-Object { $_.Pin })) {
+    Invoke-Logged winget pin add --id $p.Id --exact --version $p.Pin --force --accept-source-agreements --disable-interactivity
+}
+Update-Path

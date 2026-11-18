@@ -2,3 +2,27 @@
 {{ if ne .chezmoi.os "darwin" }}
 .config/wezterm
 {{ end }}
+{{ if eq .chezmoi.os "windows" }}
+{{- /* The Windows host gets the shared configs (git, nvim, starship, lazygit)
+       plus its PowerShell and Terminal files; the Unix shells live in WSL. */}}
+.chezmoiscripts/*.sh
+.bashrc
+.profile
+.tmux.conf
+.zprofile
+.zshenv
+.zshrc
+.local
+.tmux
+.config/bat
+.config/btop
+.config/eza
+.config/mise
+.config/shell
+.config/yazi
+.config/zsh
+{{ else }}
+.chezmoiscripts/*.ps1
+.config/powershell
+AppData
+{{ end }}

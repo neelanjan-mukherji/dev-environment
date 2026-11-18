@@ -1,0 +1,44 @@
+{{- /* Windows Terminal fragment: the Catppuccin scheme and the Nerd Font for the
+       built-in profiles (their GUIDs are fixed). WSL profiles are themed by
+       .chezmoiscripts/run_after_45-terminal-wsl-profiles.ps1 (their GUIDs vary).
+       Mapping from github.com/catppuccin/windows-terminal. settings.json stays yours. */ -}}
+{{- $p := (index .catppuccin .theme.flavor) -}}
+{{- $c := $p.colors -}}
+{{- $scheme := printf "Catppuccin %s" $p.name -}}
+{
+  "schemes": [
+    {
+      "name": {{ $scheme | quote }},
+      "cursorColor": {{ $c.rosewater | quote }},
+      "selectionBackground": {{ $c.surface2 | quote }},
+      "background": {{ $c.base | quote }},
+      "foreground": {{ $c.text | quote }},
+      "black": {{ $c.surface1 | quote }},
+      "red": {{ $c.red | quote }},
+      "green": {{ $c.green | quote }},
+      "yellow": {{ $c.yellow | quote }},
+      "blue": {{ $c.blue | quote }},
+      "purple": {{ $c.pink | quote }},
+      "cyan": {{ $c.teal | quote }},
+      "white": {{ $c.subtext1 | quote }},
+      "brightBlack": {{ $c.surface2 | quote }},
+      "brightRed": {{ $c.red | quote }},
+      "brightGreen": {{ $c.green | quote }},
+      "brightYellow": {{ $c.yellow | quote }},
+      "brightBlue": {{ $c.blue | quote }},
+      "brightPurple": {{ $c.pink | quote }},
+      "brightCyan": {{ $c.teal | quote }},
+      "brightWhite": {{ $c.subtext0 | quote }}
+    }
+  ],
+  "profiles": [
+{{- $guids := list
+      "{61c54bbd-c2c6-5271-96e7-009a87ff44bf}"
+      "{0caa0dad-35be-5f56-a8ff-afceeeaa6101}"
+      "{574e775e-4f2a-5b96-ac1e-a2962a402336}" }}
+{{- /* Windows PowerShell, Command Prompt, PowerShell 7 */}}
+{{- range $i, $g := $guids }}
+    {{ if $i }},{{ end }}{ "updates": {{ $g | quote }}, "colorScheme": {{ $scheme | quote }}, "font": { "face": "JetBrainsMono Nerd Font" } }
+{{- end }}
+  ]
+}

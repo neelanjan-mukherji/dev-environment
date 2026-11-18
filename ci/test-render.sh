@@ -37,6 +37,8 @@ exists()  { [[ -e "$home/$1" ]] || { echo "    missing file: $1"; return 1; }; }
 t() {
     local name="$1"; shift
     [[ -z "$filter" || "$name" == *"$filter"* ]] || return 0
+    # On CI, name the test before it runs, so a hang shows which one.
+    if [[ -n "${CI:-}" ]]; then echo "run  $name"; fi
     # Run outside any conditional so `set -e` aborts the test at its first failed assertion.
     local log="$work/$name.log" rc
     set +e; ( set -e; "$@" ) >"$log" 2>&1; rc=$?; set -e
@@ -257,8 +259,8 @@ test_btop_keeps_its_own_settings_and_only_the_theme_line_is_managed() {
 }
 
 # Render each install script for a profile; prints "<name>\t<rendered path>".
-# render_scripts <profile> [os]: every install script rendered for that profile
-# (and OS, default this one); prints "name<TAB>path" per script.
+# render_scripts <profile> [os]: every install script chezmoi runs for that
+# profile (and OS, default this one), rendered; prints "name<TAB>path" per script.
 render_scripts() {
     local profile="$1" os="${2:-}"
     local root="$work/scripts-$profile-${os:-here}" f out
@@ -267,7 +269,13 @@ render_scripts() {
     mkdir -p "$root/out"
     DEVENV_PROFILE="$profile" DEVENV_NAME=T DEVENV_EMAIL=t@example.com "$CHEZMOI" init --source "$repo" --no-tty --promptDefaults \
         --config "$root/chezmoi.toml" --cache "$root/cache" --persistent-state "$root/state.boltdb" >/dev/null
-    for f in "$repo"/home/.chezmoiscripts/*; do
+    # The scripts chezmoi runs on that OS (.chezmoiignore drops .sh on Windows, .ps1 elsewhere).
+    local managed
+    managed="$("$CHEZMOI" managed --source "$repo" --config "$root/chezmoi.toml" --cache "$root/cache" \
+        --persistent-state "$root/state.boltdb" --destination "$root/home" --include scripts \
+        --path-style source-relative "${override[@]}")"
+    for f in $managed; do
+        f="$repo/home/$f"
         out="$root/out/$(basename "$f" .tmpl)"
         if "$CHEZMOI" execute-template --source "$repo" --config "$root/chezmoi.toml" \
             --cache "$root/cache" --persistent-state "$root/state.boltdb" "${override[@]}" <"$f" >"$out" 2>"$out.err"; then
@@ -612,6 +620,143 @@ test_login_shell_step_reports_once_when_it_cannot_change_the_shell() {
     first="$(env -i HOME="$root/home" PATH="$can:$bin:$sys" XDG_STATE_HOME="$root/state" DEVENV_YES=1 setsid -w bash "$script" </dev/null 2>&1)" ||
         { echo "    retry failed:"; echo "$first"; return 1; }
     grep -q 'chsh -s .*zsh' "$root/home/chsh.log" || { echo "    not retried once zsh and sudo were there"; return 1; }
+}
+
+# ---- Windows host
+
+test_windows_host_gets_the_shared_configs_and_not_the_unix_shells() {
+    RENDER_OS=windows render win minimal
+    exists .config/nvim/init.lua
+    exists .gitconfig
+    exists .config/starship.toml
+    exists .config/lazygit/config.yml
+    exists .config/powershell/profile.ps1
+    exists "AppData/Local/Microsoft/Windows Terminal/Fragments/dev-environment/theme.json"
+    local f
+    for f in .zshrc .bashrc .tmux.conf .config/zsh .config/mise .config/shell .local; do
+        [[ ! -e "$home/$f" ]] || { echo "    $f rendered on Windows"; return 1; }
+    done
+    render not-win minimal
+    [[ ! -e "$home/AppData" && ! -e "$home/.config/powershell" ]] || { echo "    Windows files rendered on Linux"; return 1; }
+}
+
+test_windows_terminal_scheme_matches_catppuccins_official_port() {
+    # Expected values: github.com/catppuccin/windows-terminal mocha.json.
+    RENDER_OS=windows render wt minimal DEVENV_THEME=mocha
+    python3 - "$home/AppData/Local/Microsoft/Windows Terminal/Fragments/dev-environment/theme.json" <<'PY'
+import json, sys
+f = json.load(open(sys.argv[1]))
+want = {"name": "Catppuccin Mocha", "cursorColor": "#F5E0DC", "selectionBackground": "#585B70",
+        "background": "#1E1E2E", "foreground": "#CDD6F4", "black": "#45475A", "red": "#F38BA8",
+        "green": "#A6E3A1", "yellow": "#F9E2AF", "blue": "#89B4FA", "purple": "#F5C2E7", "cyan": "#94E2D5",
+        "white": "#BAC2DE", "brightBlack": "#585B70", "brightWhite": "#A6ADC8"}
+got = {k: v.upper() if v.startswith("#") else v for k, v in f["schemes"][0].items()}
+bad = {k: (got.get(k), v) for k, v in want.items() if got.get(k) != v}
+assert not bad, bad
+# Windows PowerShell and Command Prompt (GUIDs Windows Terminal derives from their names).
+guids = {p["updates"] for p in f["profiles"]}
+assert {"{61c54bbd-c2c6-5271-96e7-009a87ff44bf}", "{0caa0dad-35be-5f56-a8ff-afceeeaa6101}"} <= guids, guids
+assert all(p["colorScheme"] == "Catppuccin Mocha" and p["font"]["face"] == "JetBrainsMono Nerd Font" for p in f["profiles"])
+PY
+}
+
+test_windows_runs_only_powershell_install_scripts() {
+    local win linux
+    win="$(rendered_names full windows)"
+    linux="$(rendered_names full linux)"
+    grep -q 'winget-packages.ps1' <<<"$win" || { echo "$win"; return 1; }
+    ! grep -qv '\.ps1$' <<<"$win" || { echo "    non-PowerShell scripts on Windows:"; echo "$win"; return 1; }
+    ! grep -q '\.ps1$' <<<"$linux" || { echo "    PowerShell scripts on Linux:"; echo "$linux"; return 1; }
+}
+
+test_neovim_is_pinned_to_the_same_series_on_windows() {
+    local series script
+    render nvim-pin minimal
+    series="$(sed -n 's/^neovim = "\(.*\)"$/\1/p' "$home/.config/mise/config.toml")"
+    [[ -n "$series" ]] || { echo "    no neovim pin in the mise config"; return 1; }
+    script="$(render_scripts minimal windows | awk -F'\t' '/winget-packages/ {print $2}')"
+    grep -q "Id = 'Neovim.Neovim'; Version = '$series\.[0-9]*'; Pin = '$series\.\*'" "$script" ||
+        { echo "    mise pins $series; winget:"; grep Neovim "$script"; return 1; }
+}
+
+test_powershell_files_parse() {
+    if ! command -v pwsh >/dev/null 2>&1; then
+        echo "    (pwsh not installed: parse check not run; CI runs it)" >&2
+        return 0
+    fi
+    local files=() name out p
+    for p in minimal full; do
+        while IFS=$'\t' read -r name out; do files+=("$out"); done < <(render_scripts "$p" windows)
+    done
+    files+=("$repo/home/private_dot_config/powershell/profile.ps1" "$repo/install.ps1" "$repo/ci/verify.ps1")
+    cat >"$work/parse.ps1" <<'PS'
+$bad = 0
+foreach ($f in $args) {
+    $errors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$null, [ref]$errors) | Out-Null
+    foreach ($e in $errors) { "    {0}:{1}: {2}" -f $f, $e.Extent.StartLineNumber, $e.Message; $bad++ }
+}
+exit [int]($bad -gt 0)
+PS
+    pwsh -NoLogo -NoProfile -File "$work/parse.ps1" "${files[@]}"
+}
+
+test_windows_bootstrap_shows_help_and_hands_over_to_setup() {
+    if ! command -v pwsh >/dev/null 2>&1; then
+        echo "    (pwsh not installed: not run; CI runs it)" >&2
+        return 0
+    fi
+    local h="$work/bootstrap-win" out
+    mkdir -p "$h"
+    out="$(env HOME="$h" pwsh -NoLogo -NoProfile -File "$repo/install.ps1" --help)"
+    grep -q 'DEVENV_DEV_BIN' <<<"$out" || { echo "$out"; return 1; }
+    printf '#!/bin/sh\necho "fake dev $*"\n' >"$h/fake-dev"; chmod +x "$h/fake-dev"
+    out="$(env HOME="$h" DEVENV_DEV_BIN="$h/fake-dev" PROCESSOR_ARCHITECTURE=AMD64 pwsh -NoLogo -NoProfile -File "$repo/install.ps1" --yes --profile minimal 2>&1)"
+    grep -q "fake dev setup --yes --profile minimal --source $repo" <<<"$out" || { echo "$out"; return 1; }
+}
+
+test_powershell_steps_act_once_and_log_failures() {
+    # Runs the rendered Windows scripts in pwsh (Linux pwsh in CI) against a fake
+    # home and a fake Windows Terminal settings.json.
+    if ! command -v pwsh >/dev/null 2>&1; then
+        echo "    (pwsh not installed: not run; CI runs it)" >&2
+        return 0
+    fi
+    local root="$work/pwsh" scripts hook wslf lib out
+    scripts="$(render_scripts minimal windows)"
+    hook="$(awk -F'\t' '/powershell-profile/ {print $2}' <<<"$scripts")"
+    wslf="$(awk -F'\t' '/terminal-wsl-profiles/ {print $2}' <<<"$scripts")"
+    local h="$root/home" la="$root/localappdata"
+    local lst="$la/Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState"
+    mkdir -p "$h" "$lst"
+    cat >"$lst/settings.json" <<'JSON'
+{
+    // older Terminal versions write comments
+    "profiles": { "list": [
+        { "guid": "{61c54bbd-c2c6-5271-96e7-009a87ff44bf}", "name": "Windows PowerShell" },
+        { "guid": "{04fbbe2e-4bcf-5f93-aacf-0f7c217b572b}", "name": "Ubuntu-26.04", "source": "Microsoft.WSL" }
+    ] }
+}
+JSON
+    pw() { env HOME="$h" LOCALAPPDATA="$la" DEVENV_YES="${YES:-1}" pwsh -NoLogo -NoProfile -File "$@" 2>&1 </dev/null; }
+    # Asked first: nobody to ask (no --yes, no terminal) means no change, recorded as a skip.
+    out="$(YES=0 pw "$hook")"; grep -q 'Skipped: powershell profile line' <<<"$out" || { echo "$out"; return 1; }
+    [[ ! -e "$h/Documents" ]] || { echo "    changed a profile without asking"; return 1; }
+    # The profile hook: one line in each edition's profile, then silence.
+    out="$(pw "$hook")"; grep -q 'PowerShell profile' <<<"$out" || { echo "$out"; return 1; }
+    [[ -z "$(pw "$hook")" ]] || { echo "    profile hook not silent the second time"; return 1; }
+    [[ "$(grep -rl 'config/powershell/profile.ps1"  # dev-environment' "$h/Documents" | wc -l)" = 2 ]]
+    # WSL profiles get the theme through a second fragment, then silence.
+    out="$(pw "$wslf")"; grep -q 'Theming 1 WSL profile' <<<"$out" || { echo "$out"; return 1; }
+    [[ -z "$(pw "$wslf")" ]] || { echo "    WSL fragment step not silent the second time"; return 1; }
+    grep -q '04fbbe2e-4bcf-5f93-aacf-0f7c217b572b' "$la/Microsoft/Windows Terminal/Fragments/dev-environment/wsl.json"
+    # A failing command fails the step, is logged under its name, and its own flags pass through.
+    lib="$root/fail.ps1"
+    printf '{{ template "lib.ps1" . }}\nStep "Frobnicate"\nInvoke-Logged pwsh -NoProfile -Command "exit 3"\n' |
+        "$CHEZMOI" execute-template --source "$repo" --config "$work/scripts-minimal-windows/chezmoi.toml" \
+            --cache "$work/scripts-minimal-windows/cache" --persistent-state "$work/scripts-minimal-windows/state.boltdb" >"$lib"
+    if pw "$lib" >/dev/null; then echo "    a failing command did not fail the step"; return 1; fi
+    grep -q 'Frobnicate (pwsh exited with 3)' "$h/.local/state/dev/failed.log" || { cat "$h/.local/state/dev/failed.log"; return 1; }
 }
 
 test_a_failing_step_is_logged_with_its_name() {

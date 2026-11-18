@@ -26,19 +26,26 @@
 {{-   $profile = promptChoiceOnce . "profile" "Profile — minimal: shell+editor+CLI tools | dev: +Docker & languages | full: +Kubernetes & Java" $profiles (env "DEVENV_DEFAULT_PROFILE" | default $fallback) -}}
 {{- end -}}
 {{- if not (has $profile $profiles) }}{{ fail (printf "unknown profile %q (known: %s)" $profile (join ", " $profiles)) }}{{ end -}}
+{{- /* A POSIX sh for the default lookups below. Windows: the one Git for Windows
+       ships (bin\sh.exe beside cmd\git.exe); without one the defaults are blank. */ -}}
+{{- $sh := lookPath "sh" -}}
+{{- if and (not $sh) (lookPath "git") -}}
+{{-   $gitsh := joinPath (lookPath "git" | osDir | osDir) "bin" "sh.exe" -}}
+{{-   if stat $gitsh }}{{ $sh = $gitsh }}{{ end -}}
+{{- end -}}
 {{- $name := env "DEVENV_NAME" -}}
 {{- if not $name -}}
 {{-   $default := "" -}}
-{{-   if not (hasKey . "name") }}{{ $default = output "sh" "-c" "git config --global --get user.name 2>/dev/null || git config --file \"$HOME/.gitconfig.local\" --get user.name 2>/dev/null || true" | trim }}{{ end -}}
+{{-   if and $sh (not (hasKey . "name")) }}{{ $default = output $sh "-c" "git config --global --get user.name 2>/dev/null || git config --file \"$HOME/.gitconfig.local\" --get user.name 2>/dev/null || true" | trim }}{{ end -}}
 {{-   $name = promptStringOnce . "name" "Git author name (blank to skip)" $default -}}
 {{- end -}}
 {{- $email := env "DEVENV_EMAIL" -}}
 {{- if not $email -}}
 {{-   $default := "" -}}
 {{-   if not (hasKey . "email") -}}
-{{-     $default = output "sh" "-c" "git config --global --get user.email 2>/dev/null || git config --file \"$HOME/.gitconfig.local\" --get user.email 2>/dev/null || true" | trim -}}
-{{-     if and (not (hasSuffix "@users.noreply.github.com" $default)) (lookPath "gh") -}}
-{{-       $default = output "sh" "-c" "gh api user --jq '\"\\(.id)+\\(.login)@users.noreply.github.com\"' 2>/dev/null || true" | trim -}}
+{{-     if $sh }}{{ $default = output $sh "-c" "git config --global --get user.email 2>/dev/null || git config --file \"$HOME/.gitconfig.local\" --get user.email 2>/dev/null || true" | trim }}{{ end -}}
+{{-     if and $sh (not (hasSuffix "@users.noreply.github.com" $default)) (lookPath "gh") -}}
+{{-       $default = output $sh "-c" "gh api user --jq '\"\\(.id)+\\(.login)@users.noreply.github.com\"' 2>/dev/null || true" | trim -}}
 {{-     end -}}
 {{-     if not (hasSuffix "@users.noreply.github.com" $default) }}{{ $default = "" }}{{ end -}}
 {{-   end -}}
@@ -80,3 +87,11 @@ flavor = {{ $flavor | quote }}
 
 [diff]
 exclude = ["scripts"]
+{{- if eq .chezmoi.os "windows" }}
+
+# The install scripts run whatever this machine's execution policy (Windows 10/11
+# default to Restricted); -ExecutionPolicy here applies to that process only.
+[interpreters.ps1]
+command = "powershell"
+args = ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]
+{{- end }}

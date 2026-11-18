@@ -11,6 +11,7 @@ permissions:
 jobs:
   check:
     name: shellcheck + render tests
+    timeout-minutes: 15
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +29,7 @@ jobs:
 
   containers:
     name: install ${{ matrix.base }} / ${{ matrix.profile }} / ${{ matrix.arch }}
+    timeout-minutes: 60
     needs: check
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     strategy:
@@ -55,6 +57,7 @@ jobs:
 
   no-sudo:
     name: install without sudo (ubuntu:24.04 / minimal)
+    timeout-minutes: 60
     needs: check
     runs-on: ubuntu-24.04
     steps:
@@ -72,6 +75,7 @@ jobs:
 
   macos:
     name: install macOS ${{ matrix.runner }} / ${{ matrix.profile }}
+    timeout-minutes: 60
     needs: check
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -98,3 +102,35 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MISE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ci/verify.sh
+
+  windows:
+    name: install Windows host
+    timeout-minutes: 60
+    needs: check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+      - name: Build dev
+        shell: pwsh
+        run: cd cli; $env:CGO_ENABLED = '0'; go build -trimpath -o dist/dev.exe .
+      # Windows Server runner images have no winget (Windows 10/11 have it via App Installer).
+      - name: Install winget
+        shell: pwsh
+        run: |
+          Install-PackageProvider -Name NuGet -Force | Out-Null
+          Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery | Out-Null
+          Repair-WinGetPackageManager -AllUsers -Latest
+          winget --version
+      - name: Install
+        shell: pwsh
+        env:
+          DEVENV_DEV_BIN: ${{ github.workspace }}\cli\dist\dev.exe
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./install.ps1 --yes --name 'CI User' --email ci@example.com
+      - name: Verify
+        shell: pwsh
+        run: ./ci/verify.ps1

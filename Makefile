@@ -17,7 +17,7 @@ test: build
 go-test:
 	cd cli && go vet ./... && go test ./...
 	@# Again under a pseudo-terminal: captured commands must not grab it (see internal/sys).
-	cd cli && script -qec "go test -count=1 ./internal/sys" /dev/null
+	cd cli && script -qec "go test -count=1 ./internal/sys" /dev/null </dev/null
 
 ## The dev binary for this machine: cli/dist/dev
 build:

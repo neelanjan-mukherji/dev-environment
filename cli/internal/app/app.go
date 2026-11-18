@@ -130,6 +130,7 @@ Answers are remembered; later runs only confirm them.`,
 	f.BoolVar(&o.SSHKey, "ssh-key", false, "with --yes: create ~/.ssh/id_ed25519 if missing")
 	f.BoolVar(&o.GitHub, "github", false, "with --yes: gh auth login and add the SSH key (needs a person for the browser/code)")
 	f.BoolVar(&o.SkipIdentity, "skip-identity", false, "don't offer the SSH key and GitHub steps")
+	f.BoolVar(&o.WSL, "wsl", false, "Windows, with --yes: install WSL, or set up the Linux side inside it")
 	return cmd
 }
 
@@ -153,6 +154,7 @@ func mergeFlags(cmd *cobra.Command, file, flags setup.Options) setup.Options {
 	set("ssh-key", func() { o.SSHKey = flags.SSHKey })
 	set("github", func() { o.GitHub = flags.GitHub })
 	set("skip-identity", func() { o.SkipIdentity = flags.SkipIdentity })
+	set("wsl", func() { o.WSL = flags.WSL })
 	o.DryRun, o.Resume = flags.DryRun, flags.Resume
 	return o
 }

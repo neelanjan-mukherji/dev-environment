@@ -1,6 +1,6 @@
 # Release builds of the dev CLI: `git tag vX.Y.Z && git push --tags` runs
 # .github/workflows/release.yml. install.sh downloads dev_<os>_<arch>.tar.gz and
-# checks it against checksums.txt. Windows arrives with milestone 5.
+# checks it against checksums.txt; install.ps1 downloads dev_windows_<arch>.zip.
 version: 2
 project_name: dev
 
@@ -9,7 +9,7 @@ builds:
     dir: cli
     binary: dev
     env: [CGO_ENABLED=0]
-    goos: [linux, darwin]
+    goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     flags: [-trimpath]
     ldflags: ["-s -w -X main.version={{ .Version }}"]
@@ -17,6 +17,9 @@ builds:
 archives:
   - name_template: "dev_{{ .Os }}_{{ .Arch }}"
     formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
     files: [none*] # the binary only
 
 checksum:

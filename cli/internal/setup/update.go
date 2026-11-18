@@ -76,12 +76,17 @@ func Update(ctx context.Context, uo UpdateOptions, d Deps) error {
 		note("Dotfiles and install steps", err)
 	}
 
-	r.ui.step("CLI tools (mise upgrade)")
-	note("CLI tools", r.attached(ctx, nil, "mise", "upgrade"))
+	// Windows: the host has no mise, zsh or tmux (winget tools upgrade with --system).
+	if r.OS != "windows" {
+		r.ui.step("CLI tools (mise upgrade)")
+		note("CLI tools", r.attached(ctx, nil, "mise", "upgrade"))
+	}
 
 	r.ui.step("Plugins")
-	note("zsh plugins", r.attached(ctx, nil, "zsh", "-ic", "zinit update --all --parallel --quiet"))
-	note("tmux plugins", r.attached(ctx, nil, filepath.Join(r.home, ".tmux/plugins/tpm/bin/update_plugins"), "all"))
+	if r.OS != "windows" {
+		note("zsh plugins", r.attached(ctx, nil, "zsh", "-ic", "zinit update --all --parallel --quiet"))
+		note("tmux plugins", r.attached(ctx, nil, filepath.Join(r.home, ".tmux/plugins/tpm/bin/update_plugins"), "all"))
+	}
 	// Neovim plugins follow the repo's lazy-lock.json (pinned); restore, never bump.
 	note("Neovim plugins", r.attached(ctx, nil, "nvim", "--headless", "+Lazy! restore", "+qa"))
 
@@ -135,6 +140,17 @@ func (r *run) check(ctx context.Context, repo string) error {
 }
 
 func (r *run) upgradeSystem(ctx context.Context) error {
+	if r.OS == "windows" {
+		// Pinned packages (Neovim 0.11) stay within their pin.
+		ok, err := r.confirm(Question{Text: "Upgrade winget packages (winget upgrade --all)?"}, nil)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errStop
+		}
+		return r.attached(ctx, nil, "winget", "upgrade", "--all", "--accept-package-agreements", "--accept-source-agreements", "--silent")
+	}
 	if r.OS == "darwin" {
 		ok, err := r.confirm(Question{Text: "Upgrade Homebrew packages (brew upgrade)?"}, nil)
 		if err != nil {

@@ -6,11 +6,11 @@ machine in sync.
 
 - **Dotfiles:** [chezmoi](https://chezmoi.io) (source in `home/`)
 - **Tools and languages:** [mise](https://mise.jdx.dev): no root needed, per-project versions
-- **Base packages:** the OS package manager (apt, Homebrew)
+- **Base packages:** the OS package manager (apt, dnf, pacman, apk, Homebrew, winget)
 
-> **Status: v2 milestone 4.** Supported today: Ubuntu / Debian (including WSL 2),
-> Fedora, Arch and macOS, on x86_64 and arm64; Alpine with the `minimal` profile.
-> Windows follows. See [docs/v2-design.md](docs/v2-design.md).
+> **Status: v2 milestone 5.** Supported today: Ubuntu / Debian (including WSL 2),
+> Fedora, Arch and macOS, on x86_64 and arm64; Alpine with the `minimal` profile;
+> the Windows host (winget, PowerShell, Windows Terminal), with WSL for the Linux side. See [docs/v2-design.md](docs/v2-design.md).
 > The v1 Stow-based setup is tagged `v1.0.0`.
 
 ## Install
@@ -137,6 +137,35 @@ files are honoured automatically.
   shell change are skipped and listed in `skipped.log` (`dev doctor` reports
   them as skipped, not failed). Without sudo, git, curl and bash must already
   be installed, and zsh too if you want it as your shell.
+
+## Windows
+
+```powershell
+irm https://raw.githubusercontent.com/neelanjan-mukherji/dev-environment/main/install.ps1 | iex
+```
+
+The Windows host stays light; the real work happens in WSL. `install.ps1` puts
+`dev.exe` in `~\.local\bin` and runs `dev setup`, which:
+
+- installs the host tools with **winget**: git, gh, Neovim (pinned to 0.11),
+  ripgrep, fd, fzf, lazygit, starship, zoxide, zig (Neovim's parser compiler),
+  PowerShell 7, Windows Terminal and JetBrainsMono Nerd Font. Some installers
+  ask for admin rights;
+- shares the **nvim, git, starship and lazygit configs** with Linux and macOS by
+  setting `XDG_CONFIG_HOME` to `~\.config`;
+- adds one line to each PowerShell `$PROFILE` (OneDrive Documents included)
+  that loads `~\.config\powershell\profile.ps1`: starship, zoxide, a few aliases.
+  Your own profile lines stay; machine-only additions go in `local.ps1` next to it;
+- themes **Windows Terminal** with a fragment (Catppuccin scheme and Nerd Font for
+  PowerShell, Command Prompt and your WSL profiles). Your `settings.json` is
+  only read, never written;
+- finally offers **WSL**: installing it (`wsl --install -d Ubuntu`, then a
+  restart), or running the Linux setup inside your distro. Under `--yes` only
+  with `--wsl`.
+
+`dev update`, `dev doctor` and `dev setup --resume` work as on Linux;
+`dev update --system` runs `winget upgrade --all` (Neovim stays within 0.11 via a
+winget pin).
 
 ## WSL notes
 

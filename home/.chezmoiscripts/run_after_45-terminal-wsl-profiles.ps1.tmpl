@@ -1,0 +1,33 @@
+# Windows Terminal: the Catppuccin scheme and Nerd Font for the WSL profiles too.
+# Their GUIDs differ per machine, so they are read from Terminal's settings.json
+# (never written) into a second fragment next to theme.json. Every apply, silent
+# when nothing changed.
+{{ template "lib.ps1" . }}
+
+$terminal = Join-Path $env:LOCALAPPDATA (Join-Path 'Microsoft' 'Windows Terminal')
+$settings = @(
+    (Join-Path $env:LOCALAPPDATA 'Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState/settings.json'),
+    (Join-Path $env:LOCALAPPDATA 'Packages/Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe/LocalState/settings.json'),
+    (Join-Path $terminal 'settings.json')
+) | ForEach-Object { [IO.Path]::GetFullPath($_) } | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $settings) { exit 0 }   # Terminal not started yet; the next apply catches up
+
+# settings.json may have // comment lines, which Windows PowerShell's parser rejects.
+$json = (Get-Content -Raw $settings) -replace '(?m)^\s*//.*$', ''
+try { $profiles = ($json | ConvertFrom-Json).profiles.list } catch { exit 0 }
+$wsl = @($profiles | Where-Object { $_.source -in @('Microsoft.WSL', 'Windows.Terminal.Wsl') } | ForEach-Object { $_.guid })
+
+$scheme = {{ printf "Catppuccin %s" (index .catppuccin .theme.flavor).name | squote }}
+$updates = @($wsl | Sort-Object | ForEach-Object {
+    [ordered]@{ updates = $_; colorScheme = $scheme; font = [ordered]@{ face = 'JetBrainsMono Nerd Font' } }
+})
+# Compressed: Windows PowerShell and PowerShell 7 indent differently, which would
+# make a re-apply rewrite the file.
+$content = ConvertTo-Json -Depth 5 -Compress ([ordered]@{ profiles = $updates })
+$fragment = [IO.Path]::GetFullPath((Join-Path $terminal 'Fragments/dev-environment/wsl.json'))
+if ((Test-Path $fragment) -and ((Get-Content -Raw $fragment) -eq $content)) { exit 0 }
+
+Step 'Windows Terminal: WSL profiles'
+Info "Theming $($wsl.Count) WSL profile(s) in $fragment"
+New-Item -ItemType Directory -Force -Path (Split-Path $fragment) | Out-Null
+[IO.File]::WriteAllText($fragment, $content, (New-Object Text.UTF8Encoding $false))

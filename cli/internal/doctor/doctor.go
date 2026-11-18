@@ -61,13 +61,18 @@ func stateDir() string {
 }
 
 // shell is what a check's script runs in.
-type shell struct{ name, flag string }
+type shell struct {
+	name  string
+	flags []string
+}
 
 var (
 	// Interactive zsh/bash see exactly what the user's shells see (PATH, aliases, plugins).
-	interactiveZsh  = shell{"zsh", "-ic"}
-	interactiveBash = shell{"bash", "-ic"}
-	plainBash       = shell{"bash", "-c"}
+	interactiveZsh  = shell{"zsh", []string{"-ic"}}
+	interactiveBash = shell{"bash", []string{"-ic"}}
+	plainBash       = shell{"bash", []string{"-c"}}
+	// Windows: Windows PowerShell (always there), without the user's profile.
+	powerShell = shell{"powershell", []string{"-NoLogo", "-NoProfile", "-Command"}}
 )
 
 // Check is one assertion, run as a shell snippet.
@@ -130,6 +135,9 @@ var componentTools = []struct {
 
 // Checks returns every check that applies to m.
 func Checks(m Machine) []Check {
+	if m.OS == "windows" {
+		return windowsChecks(m)
+	}
 	var cs []Check
 	for _, t := range coreTools {
 		cs = append(cs, zsh("zsh has "+t, "command -v "+t))
@@ -213,7 +221,7 @@ func Run(ctx context.Context, r sys.Runner, checks []Check, w io.Writer) (failed
 		go func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			out, err := r.Run(ctx, sys.Command(c.Shell.name, c.Shell.flag, c.Script))
+			out, err := r.Run(ctx, sys.Command(c.Shell.name, append(slices.Clone(c.Shell.flags), c.Script)...))
 			results[i] <- result{out, err}
 		}()
 	}

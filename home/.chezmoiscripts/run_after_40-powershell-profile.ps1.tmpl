@@ -1,0 +1,56 @@
+# Both PowerShell editions load ~\.config\powershell\profile.ps1 through one line
+# in their own $PROFILE (wherever Documents is, OneDrive included); the rest of
+# those files stays yours. Asks first; silent once the line is there, and a "no"
+# is remembered until the marker file is deleted.
+{{ template "lib.ps1" . }}
+
+$shared = Join-Path $HOME '.config\powershell\profile.ps1'
+$line = ". `"$shared`"  # dev-environment"
+$documents = [Environment]::GetFolderPath('MyDocuments')
+if (-not $documents) { $documents = Join-Path $HOME 'Documents' }   # never empty on Windows
+$profiles = @(
+    (Join-Path $documents 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1'),
+    (Join-Path $documents 'PowerShell\Microsoft.PowerShell_profile.ps1')
+)
+$todo = @($profiles | Where-Object { -not ((Test-Path $_) -and (Select-String -Path $_ -SimpleMatch $line -Quiet)) })
+
+# Windows 10/11 default to the Restricted execution policy, which stops any
+# profile from loading. The policy this user gets (Process scope aside):
+$set = Get-ExecutionPolicy -List | Where-Object { $_.Scope -ne 'Process' -and "$($_.ExecutionPolicy)" -ne 'Undefined' } | Select-Object -First 1
+$policy = if ($set) { "$($set.ExecutionPolicy)" } elseif ((Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue).ProductType -eq 1) { 'Restricted' } else { 'RemoteSigned' }
+$blocked = $policy -in @('Restricted', 'AllSigned')
+
+if ($todo.Count -eq 0 -and -not $blocked) { exit 0 }
+$declined = Join-Path $DevState 'powershell-profile.declined'
+if (Test-Path $declined) { exit 0 }
+
+function Set-Declined([string]$What) {
+    if (-not [Console]::IsInputRedirected) {
+        New-Item -ItemType File -Force -Path $declined | Out-Null
+        Info "Won't ask again. To be asked next time: Remove-Item '$declined'"
+    }
+    Add-Skip $What
+    exit 0
+}
+
+Step 'PowerShell profile'
+if ($todo.Count -gt 0) {
+    foreach ($p in $todo) { Info "Would add to ${p}: $line" }
+    if (-not (Confirm-Step 'Add that line (starship, zoxide and the shared aliases in PowerShell)?')) {
+        Set-Declined 'powershell profile line (declined)'
+    }
+    foreach ($p in $todo) {
+        Info "Adding to ${p}"
+        New-Item -ItemType Directory -Force -Path (Split-Path $p) | Out-Null
+        # UTF-8: Windows PowerShell's default (ANSI) garbles non-ASCII paths for PowerShell 7.
+        Add-Content -Path $p -Value $line -Encoding UTF8
+    }
+}
+if ($blocked) {
+    Info "The execution policy is $policy, so PowerShell loads no profile at all."
+    if (-not (Confirm-Step 'Allow your own scripts for your user (Set-ExecutionPolicy RemoteSigned -Scope CurrentUser)?')) {
+        Set-Declined "powershell execution policy left at $policy (profiles don't load)"
+    }
+    Write-Host '    $ Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force' -ForegroundColor DarkGray
+    Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+}

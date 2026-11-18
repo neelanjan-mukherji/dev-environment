@@ -1,0 +1,13 @@
+# Re-runs when the plugin lock changes:
+# lazy-lock {{ include "private_dot_config/nvim/lazy-lock.json" | sha256sum }}
+{{ template "lib.ps1" . }}
+
+Step 'Neovim plugins'
+Update-Path
+if (-not $env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME = Join-Path $HOME '.config' }
+if (-not (Get-Command nvim -ErrorAction SilentlyContinue)) {
+    Add-Skip 'neovim plugins: nvim is not installed'
+    exit 0
+}
+# Restore to the repo's lazy-lock.json (pinned), never bump.
+Invoke-Logged nvim --headless '+Lazy! restore' +qa

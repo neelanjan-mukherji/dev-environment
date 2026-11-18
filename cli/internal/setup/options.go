@@ -31,6 +31,10 @@ type Options struct {
 	GitHub       bool `yaml:"github"`        // gh auth login, then add the key to the account
 	SkipIdentity bool `yaml:"skip_identity"` // don't offer them at all
 
+	// Windows: install WSL, or set up its Linux side. A person is asked; with
+	// --yes it runs only when chosen here (installing WSL needs a restart).
+	WSL bool `yaml:"wsl"`
+
 	DryRun bool `yaml:"-"`
 	Resume bool `yaml:"-"`
 

@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -101,6 +102,10 @@ func Change(ctx context.Context, co ChangeOptions, d Deps) error {
 
 	addComponents, addTools := splitComponents(co.Add)
 	removeComponents, removeTools := splitComponents(co.Remove)
+	if r.OS == "windows" && len(addTools)+len(removeTools) > 0 {
+		return errors.New("the Windows host has no mise: add tools on the Linux side (in WSL: dev add " +
+			strings.Join(append(addTools, removeTools...), " ") + ")")
+	}
 
 	local := filepath.Join(r.home, ".config/mise/conf.d/local.toml")
 	if len(addTools) > 0 {

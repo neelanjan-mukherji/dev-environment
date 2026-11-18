@@ -1,0 +1,12 @@
+# Neovim, lazygit and starship read their configs from ~\.config, the same files
+# as on Linux and macOS, once XDG_CONFIG_HOME points there. Silent once it does.
+{{ template "lib.ps1" . }}
+
+$want = Join-Path $HOME '.config'
+if ([Environment]::GetEnvironmentVariable('XDG_CONFIG_HOME', 'User') -eq $want) { exit 0 }
+Step 'XDG_CONFIG_HOME'
+Info 'Neovim, lazygit and starship then share their configs with Linux and macOS (~\.config).'
+Write-Host "    `$ [Environment]::SetEnvironmentVariable('XDG_CONFIG_HOME', '$want', 'User')" -ForegroundColor DarkGray
+[Environment]::SetEnvironmentVariable('XDG_CONFIG_HOME', $want, 'User')
+$env:XDG_CONFIG_HOME = $want
+Info 'Open a new terminal for it to take effect everywhere.'

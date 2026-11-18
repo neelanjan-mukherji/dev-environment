@@ -1,7 +1,7 @@
 # Base system packages, installed with the OS package manager (needs sudo).
 # Everything else comes from mise (home/private_dot_config/mise/config.toml.tmpl).
 # Linux: the list for the package manager found at install time (apt, dnf, pacman,
-# apk). macOS: Homebrew. The winget list arrives with Windows (milestone 5).
+# apk). macOS: Homebrew. Windows: winget (the host tools; Linux work happens in WSL).
 # Each list should mean the same set: shell, git, curl, compilers, archivers.
 packages:
   apt:
@@ -89,3 +89,22 @@ packages:
   brew_casks:
     - font-jetbrains-mono-nerd-font
     - wezterm
+  # Windows host: id, and optionally an exact version and a winget pin (upgrades
+  # stay within it). Neovim matches the Linux/macOS pin (mise config).
+  winget:
+    - id: Git.Git
+    - id: GitHub.cli
+    - id: twpayne.chezmoi
+    - id: Neovim.Neovim
+      version: "0.11.7"
+      pin: "0.11.*"
+    - id: zig.zig              # C compiler for nvim-treesitter parsers
+    - id: BurntSushi.ripgrep.MSVC
+    - id: sharkdp.fd
+    - id: junegunn.fzf
+    - id: JesseDuffield.lazygit
+    - id: Starship.Starship
+    - id: ajeetdsouza.zoxide
+    - id: Microsoft.PowerShell
+    - id: Microsoft.WindowsTerminal
+    - id: DEVCOM.JetBrainsMonoNerdFont

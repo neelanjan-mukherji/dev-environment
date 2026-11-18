@@ -95,7 +95,7 @@ func Run(ctx context.Context, o Options, d Deps) error {
 	if o.DryRun {
 		steps = append(steps, r.preview)
 	} else {
-		steps = append(steps, r.migrateV1, r.review, r.applyAndSummarise, r.identity)
+		steps = append(steps, r.migrateV1, r.review, r.applyAndSummarise, r.identity, r.wsl)
 	}
 	return r.steps(ctx, steps...)
 }
@@ -143,8 +143,8 @@ func stateDir(home string) string {
 func prependPath(dirs ...string) {
 	path := os.Getenv("PATH")
 	for _, d := range dirs {
-		if !strings.Contains(":"+path+":", ":"+d+":") {
-			path = d + ":" + path
+		if !strings.Contains(pathSep+path+pathSep, pathSep+d+pathSep) {
+			path = d + pathSep + path
 		}
 	}
 	os.Setenv("PATH", path)
@@ -239,9 +239,9 @@ func (r *run) confirm(q Question, explain func()) (bool, error) {
 
 func (r *run) preflight() error {
 	switch r.OS {
-	case "linux", "darwin":
+	case "linux", "darwin", "windows":
 	default:
-		return fmt.Errorf("unsupported OS %s; on Windows, run dev inside WSL", r.OS)
+		return fmt.Errorf("unsupported OS %s", r.OS)
 	}
 	if os.Geteuid() == 0 && os.Getenv("DEVENV_ALLOW_ROOT") != "1" {
 		return errors.New("run as your normal user, not root (sudo is used only where needed)")
@@ -250,6 +250,9 @@ func (r *run) preflight() error {
 }
 
 func (r *run) prerequisites(ctx context.Context) error {
+	if r.OS == "windows" {
+		return r.prerequisitesWindows(ctx)
+	}
 	if r.OS == "darwin" {
 		// macOS ships curl; git is a stub until the Command Line Tools are installed.
 		if _, err := r.sh(ctx, "git --version"); err == nil {
@@ -324,6 +327,9 @@ func (r *run) source(ctx context.Context) error {
 // tools installs chezmoi and mise with their official install scripts, after
 // showing the command and asking.
 func (r *run) tools(ctx context.Context) error {
+	if r.OS == "windows" {
+		return r.toolsWindows(ctx)
+	}
 	if err := os.MkdirAll(r.bin, 0o755); err != nil {
 		return err
 	}
