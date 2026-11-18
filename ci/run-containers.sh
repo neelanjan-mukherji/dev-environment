@@ -4,11 +4,15 @@
 #        PROFILES="minimal full" ci/run-containers.sh
 # The "full" profile runs as a v1 migration: the home starts with Stow links
 # (ci/seed-v1.sh) and no --profile is given, so "full" must be the default.
-# Set GITHUB_TOKEN to avoid GitHub API rate limits while mise downloads tools.
+# Needs Go on the host to build dev. Set GITHUB_TOKEN to avoid GitHub API rate limits while mise downloads tools.
 set -Eeuo pipefail
 repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 bases=("$@"); ((${#bases[@]})) || bases=(ubuntu:24.04 debian:13)
 read -r -a profiles <<<"${PROFILES:-minimal full}"
+
+# The dev binary goes into the image with the repo copy (cli/dist/dev), like a
+# release download would put it on a fresh machine.
+(cd "$repo/cli" && CGO_ENABLED=0 GOOS=linux go build -trimpath -o dist/dev .)
 
 results=()
 for base in "${bases[@]}"; do
@@ -21,7 +25,7 @@ for base in "${bases[@]}"; do
         if docker run --rm -e GITHUB_TOKEN -e MISE_GITHUB_TOKEN="${GITHUB_TOKEN:-}" "$tag" bash -c "
             { [[ -z '$setup' ]] && ./dev-environment/ci/seed-v1.sh || true; } &&
             ./dev-environment/install.sh --yes $setup --name 'CI User' --email ci@example.com &&
-            ./dev-environment/ci/verify.sh $profile"; then
+            ./dev-environment/ci/verify.sh"; then
             results+=("ok   $base / $profile")
         else
             results+=("FAIL $base / $profile")

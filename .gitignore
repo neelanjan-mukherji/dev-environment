@@ -17,3 +17,4 @@ id_ed25519
 *.swp
 *.swo
 .DS_Store
+cli/dist/

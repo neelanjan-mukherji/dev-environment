@@ -92,8 +92,8 @@ files are honoured automatically.
 ## Development
 
 ```bash
-make check             # shellcheck + render tests (no Docker; never touches $HOME)
+make check             # shellcheck, Go tests + render tests (no Docker; never touches $HOME)
 make test FILTER=theme # one render test
 make test-containers   # full install + verify in clean Ubuntu/Debian containers
-make verify            # run the container checks against this machine
+make verify            # dev doctor + a second-install no-op check against this machine
 ```

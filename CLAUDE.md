@@ -9,15 +9,16 @@ Personal workstation setup meant to run on every OS. The v2 redesign lives on br
 ## Commands
 
 ```bash
-make check                    # shellcheck + ci/test-render.sh (fast, no Docker, never touches $HOME)
+make check                    # shellcheck + go vet/test (cli/) + ci/test-render.sh (fast, no Docker, never touches $HOME)
+make build                    # cli/dist/dev (the dev binary; `cd cli && go test ./... -run <Name>` for one Go test)
 make test FILTER=<substring>  # run matching render tests only
 make test-containers          # ci/run-containers.sh: install.sh --yes + ci/verify.sh in clean ubuntu/debian containers ("full" runs as a v1 migration via ci/seed-v1.sh)
-make verify                   # ci/verify.sh against this machine
+make verify                   # build, then ci/verify.sh (dev doctor + second-install no-op) against this machine
 BASES=debian:13 PROFILES=full make test-containers
 ./install.sh --dry-run        # renders against the real $HOME with scratch config/state; changes nothing
 ```
 
-Render tests need `chezmoi`, `shellcheck`, `zsh` and `script` (util-linux) on PATH.
+Render tests need `chezmoi`, `shellcheck`, `zsh` and `script` (util-linux) on PATH; the CLI needs Go (pinned in `cli/go.mod`).
 
 ## Architecture
 
@@ -30,6 +31,7 @@ Render tests need `chezmoi`, `shellcheck`, `zsh` and `script` (util-linux) on PA
   - **Exception:** `run_before_00-migrate-v1` fails when declined, since applying over v1 directory links would write into the old tree. `install.sh` runs it before its preview/backup and stops if it fails.
   - **Steps that must retry after a skip** (login shell, retiring v1 tools) are `run_after_` scripts that stay silent when there is nothing to do; verify.sh's no-op check depends on that silence. A declined prompt is remembered in `~/.local/state/dev/`.
   - **Gating:** `run_onchange_` scripts embed a hash of their inputs, which is what makes them re-run. A script that renders to empty is skipped, and that's how OS/component gating works.
+- **`dev` CLI** (`cli/`, Go + cobra/lipgloss, milestone 2 in progress). `internal/app.Main` is the whole CLI behind a `sys.Runner`; every external command goes through it, and tests in `internal/app` drive `Main` against a fake runner. The chezmoi scripts stay the install engine; `dev` orchestrates them. `dev doctor` (`internal/doctor`) holds the machine checks, derived from the effective components; `ci/verify.sh` runs it and adds only the post-install checks (v1 migration, second install is a no-op).
 - **Externals.** `home/.chezmoiexternal.toml.tmpl` fetches Zinit, TPM and the Catppuccin theme files, so shell startup never touches the network. `.zshrc` must keep working when Zinit or tools are missing; the render tests assert that.
 - **PATH** is defined once in `~/.config/shell/path.sh`, sourced by `.zshenv`, `.profile`, `.bashrc` and lib.sh.
 - **Shells.** zsh and the bash fallback share `~/.config/shell/{env.sh,aliases.sh,functions.sh}`; those files must stay valid in both shells. zsh-only syntax goes in `~/.config/zsh/aliases.zsh`. Integrations stay guarded with `command -v`.
