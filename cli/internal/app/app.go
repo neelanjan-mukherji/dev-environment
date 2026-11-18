@@ -112,15 +112,18 @@ Answers are remembered; later runs only confirm them.`,
 	f := cmd.Flags()
 	f.StringVar(&config, "config", "", "read answers from a machine.yaml")
 	f.StringVar(&o.Source, "source", "", "use this dev-environment checkout (default ~/dev-environment, cloned if missing)")
-	f.StringVar(&o.Profile, "profile", "", "minimal, dev or full")
+	f.StringVar(&o.Profile, "profile", "", strings.Join(setup.ProfileNames(), ", "))
 	f.StringVar(&o.Name, "name", "", "git author name")
 	f.StringVar(&o.Email, "email", "", "git author email (GitHub noreply recommended)")
-	f.StringSliceVar(&o.Add, "add", nil, "extra components (docker, devtools, node, python, go, rust, kubernetes, java, cloud)")
+	f.StringSliceVar(&o.Add, "add", nil, "extra components ("+strings.Join(setup.KnownComponents, ", ")+")")
 	f.StringSliceVar(&o.Remove, "remove", nil, "components to leave out")
 	f.StringVar(&o.Theme, "theme", "", "catppuccin flavor: latte, frappe, macchiato, mocha")
 	f.BoolVarP(&o.Yes, "yes", "y", false, "no questions: accept defaults and confirmations")
 	f.BoolVar(&o.DryRun, "dry-run", false, "show what would change, change nothing")
 	f.BoolVar(&o.Resume, "resume", false, "only retry the install steps that failed last time")
+	f.BoolVar(&o.SSHKey, "ssh-key", false, "with --yes: create ~/.ssh/id_ed25519 if missing")
+	f.BoolVar(&o.GitHub, "github", false, "with --yes: gh auth login and add the SSH key (needs a person for the browser/code)")
+	f.BoolVar(&o.SkipIdentity, "skip-identity", false, "don't offer the SSH key and GitHub steps")
 	return cmd
 }
 
@@ -140,6 +143,9 @@ func mergeFlags(cmd *cobra.Command, file, flags setup.Options) setup.Options {
 	set("remove", func() { o.Remove = flags.Remove })
 	set("theme", func() { o.Theme = flags.Theme })
 	set("yes", func() { o.Yes = flags.Yes })
+	set("ssh-key", func() { o.SSHKey = flags.SSHKey })
+	set("github", func() { o.GitHub = flags.GitHub })
+	set("skip-identity", func() { o.SkipIdentity = flags.SkipIdentity })
 	o.DryRun, o.Resume = flags.DryRun, flags.Resume
 	return o
 }
@@ -174,7 +180,7 @@ func (d Deps) setupDeps(cmd *cobra.Command) setup.Deps {
 func profileCmd(d Deps) *cobra.Command {
 	var co setup.ChangeOptions
 	cmd := &cobra.Command{
-		Use:   "profile [minimal|dev|full]",
+		Use:   "profile [" + strings.Join(setup.ProfileNames(), "|") + "]",
 		Short: "Show or switch this machine's profile (keeps component overrides)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

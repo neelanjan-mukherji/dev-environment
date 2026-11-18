@@ -27,8 +27,18 @@ for arg in "$@"; do
     case "$arg" in
         --from-source) from_source=1 ;;
         -h | --help)
-            sed -n '2,17p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'
-            echo "Then: dev setup --help"
+            # Inline rather than read from $0: under `curl | sh` there is no file.
+            cat <<'HELP'
+Usage: install.sh [--from-source] [dev setup options]
+
+Puts the `dev` CLI in ~/.local/bin, then runs `dev setup` with the options.
+  --from-source   build dev from this clone (needs Go) instead of downloading
+Where dev comes from otherwise:
+  DEVENV_DEV_BIN=<path>    use this binary
+  DEVENV_DEV_VERSION=<tag> this release instead of the newest one
+  (the download is checked against the release's checksums.txt)
+For the setup options: dev setup --help
+HELP
             exit 0 ;;
     esac
 done

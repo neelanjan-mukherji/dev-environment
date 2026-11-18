@@ -22,11 +22,21 @@ func (Terminal) Interactive() bool {
 // accessible turns off the full-screen widgets on dumb terminals.
 func accessible() bool { return os.Getenv("TERM") == "dumb" || os.Getenv("ACCESSIBLE") != "" }
 
-func (Terminal) Confirm(q string) (bool, error) {
-	var ok bool
-	err := huh.NewConfirm().Title(q).Affirmative("Yes").Negative("No").Value(&ok).
-		WithTheme(huh.ThemeCatppuccin()).WithAccessible(accessible()).Run()
-	return ok, err
+func (Terminal) Ask(q setup.Question) (setup.Answer, error) {
+	if q.Explain == "" {
+		var ok bool
+		err := huh.NewConfirm().Title(q.Text).Affirmative("Yes").Negative("No").Value(&ok).
+			WithTheme(huh.ThemeCatppuccin()).WithAccessible(accessible()).Run()
+		if ok {
+			return setup.Yes, err
+		}
+		return setup.No, err
+	}
+	a := setup.Yes
+	err := huh.NewSelect[setup.Answer]().Title(q.Text).
+		Options(huh.NewOption("Yes", setup.Yes), huh.NewOption("No", setup.No), huh.NewOption(q.Explain, setup.Explain)).
+		Value(&a).WithTheme(huh.ThemeCatppuccin()).WithAccessible(accessible()).Run()
+	return a, err
 }
 
 func (Terminal) EditSettings(s setup.Settings) (setup.Settings, error) {

@@ -28,30 +28,30 @@ func Update(ctx context.Context, uo UpdateOptions, d Deps) error {
 	if err != nil {
 		return err
 	}
-	prependPath(r.bin, filepath.Join(r.home, ".local/share/mise/shims"))
-	out, err := r.Runner.Run(ctx, sys.Command("chezmoi", "execute-template", "{{ .chezmoi.workingTree }}"))
+	repo, err := workingTree(ctx, r.Runner)
 	if err != nil {
-		return fmt.Errorf("this machine was never set up; run `dev setup` first (%s)", strings.TrimSpace(out))
+		return err
 	}
-	repo := strings.TrimSpace(out)
 	if uo.Check {
 		return r.check(ctx, repo)
+	}
+	if hasV1Links(r.home) {
+		return errV1
 	}
 
 	var rows []row
 	failed := false
 	note := func(name string, err error) {
-		if errors.Is(err, errStop) {
+		switch {
+		case errors.Is(err, errStop):
 			rows = append(rows, row{statusSkipped, name})
-			return
-		}
-		if err != nil {
+		case err != nil:
 			failed = true
 			rows = append(rows, row{statusFailed, name})
 			r.ui.warn(name + ": " + err.Error())
-			return
+		default:
+			rows = append(rows, row{statusOK, name})
 		}
-		rows = append(rows, row{statusOK, name})
 	}
 
 	r.ui.step("Repository")
@@ -61,12 +61,20 @@ func Update(ctx context.Context, uo UpdateOptions, d Deps) error {
 		rows = append(rows, row{statusSkipped, "Repository: not fast-forwarded"})
 	} else {
 		rows = append(rows, row{statusOK, "Repository"})
+		// Up to date with upstream now, whatever happens below: the notice can go.
+		if err := r.writeCheck("0"); err != nil {
+			return err
+		}
 	}
 
-	r.ui.step("Dotfiles and install steps")
-	skipped, scriptFailed, err := r.apply(ctx, "--refresh-externals=always")
-	rows = append(rows, scriptRows(skipped, scriptFailed)...)
-	note("Dotfiles and install steps", err)
+	// Locally edited dotfiles are listed, backed up and only overwritten when confirmed.
+	if err := r.review(ctx); err != nil {
+		note("Dotfiles and install steps", err)
+	} else {
+		skipped, scriptFailed, err := r.apply(ctx, "--refresh-externals=always")
+		rows = append(rows, scriptRows(skipped, scriptFailed)...)
+		note("Dotfiles and install steps", err)
+	}
 
 	r.ui.step("CLI tools (mise upgrade)")
 	note("CLI tools", r.attached(ctx, nil, "mise", "upgrade"))
@@ -88,16 +96,29 @@ func Update(ctx context.Context, uo UpdateOptions, d Deps) error {
 		r.ui.warn("Some steps failed; fix the cause and run `dev update` again.")
 		return ErrReported
 	}
-	return os.WriteFile(filepath.Join(r.state, "update-check"), []byte("0\n"), 0o644)
+	return nil
+}
+
+// workingTree is the repo this machine was set up from.
+func workingTree(ctx context.Context, r sys.Runner) (string, error) {
+	out, err := r.Run(ctx, sys.Command("chezmoi", "execute-template", "{{ .chezmoi.workingTree }}"))
+	if err != nil {
+		return "", fmt.Errorf("%w (%s)", errNotSetUp, strings.TrimSpace(out))
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func (r *run) writeCheck(behind string) error {
+	if err := os.MkdirAll(r.state, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(r.state, "update-check"), []byte(behind+"\n"), 0o644)
 }
 
 // check records how many commits the repo is behind its upstream in
 // ~/.local/state/dev/update-check. Shells read it to show a notice; its age
 // decides when they check again.
 func (r *run) check(ctx context.Context, repo string) error {
-	if err := os.MkdirAll(r.state, 0o755); err != nil {
-		return err
-	}
 	path := filepath.Join(r.state, "update-check")
 	behind := "0"
 	if old, err := os.ReadFile(path); err == nil {
@@ -110,23 +131,19 @@ func (r *run) check(ctx context.Context, repo string) error {
 		}
 	}
 	// Written even when offline, so shells don't retry on every start.
-	return os.WriteFile(path, []byte(behind+"\n"), 0o644)
+	return r.writeCheck(behind)
 }
 
 func (r *run) upgradeSystem(ctx context.Context) error {
 	if _, err := r.sh(ctx, "command -v apt-get"); err != nil {
 		return errors.New("only apt is supported so far")
 	}
-	ok, err := r.confirm("Upgrade OS packages with apt (needs sudo)?")
+	ok, err := r.confirm(Question{Text: "Upgrade OS packages with apt (needs sudo)?"}, nil)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return errStop
 	}
-	root := asRoot()
-	if err := r.attached(ctx, nil, root[0], append(root[1:], "apt-get", "update", "-qq")...); err != nil {
-		return err
-	}
-	return r.attached(ctx, nil, root[0], append(root[1:], "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "upgrade", "-y")...)
+	return r.apt(ctx, "upgrade", "-y")
 }

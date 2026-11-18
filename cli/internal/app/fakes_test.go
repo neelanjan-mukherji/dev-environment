@@ -77,21 +77,32 @@ func (f *fakeRunner) log() string { return strings.Join(f.calls, "\n") }
 // settings form. A nil *fakePrompter is nobody at the terminal.
 type fakePrompter struct {
 	answers map[string]bool
-	edit    func(setup.Settings) setup.Settings
-	asked   []string
-	edited  bool
+	// explainFirst: questions (by substring) first answered with "explain", once.
+	explainFirst map[string]bool
+	edit         func(setup.Settings) setup.Settings
+	asked        []setup.Question
+	edited       bool
 }
 
 func (p *fakePrompter) Interactive() bool { return p != nil }
 
-func (p *fakePrompter) Confirm(q string) (bool, error) {
+func (p *fakePrompter) Ask(q setup.Question) (setup.Answer, error) {
 	p.asked = append(p.asked, q)
-	for k, v := range p.answers {
-		if strings.Contains(q, k) {
-			return v, nil
+	for k := range p.explainFirst {
+		if strings.Contains(q.Text, k) && q.Explain != "" {
+			delete(p.explainFirst, k)
+			return setup.Explain, nil
 		}
 	}
-	return false, nil
+	for k, v := range p.answers {
+		if strings.Contains(q.Text, k) {
+			if v {
+				return setup.Yes, nil
+			}
+			return setup.No, nil
+		}
+	}
+	return setup.No, nil
 }
 
 func (p *fakePrompter) EditSettings(s setup.Settings) (setup.Settings, error) {
@@ -115,8 +126,8 @@ func run(t *testing.T, r *fakeRunner, p *fakePrompter, args ...string) (string, 
 
 type nobody struct{}
 
-func (nobody) Interactive() bool            { return false }
-func (nobody) Confirm(string) (bool, error) { return false, errors.New("nobody to ask") }
+func (nobody) Interactive() bool                        { return false }
+func (nobody) Ask(setup.Question) (setup.Answer, error) { return setup.No, errors.New("nobody to ask") }
 func (nobody) EditSettings(s setup.Settings) (setup.Settings, error) {
 	return s, errors.New("nobody to ask")
 }

@@ -155,6 +155,12 @@ test_shells_say_once_a_day_when_the_repo_is_behind_and_never_update() {
         grep -q '3 new commit.*dev update' <<<"$out" || { echo "    $sh printed:"; echo "$out"; return 1; }
         for _ in 1 2 3 4 5 6 7 8 9 10; do [[ -s "$home/dev-calls" ]] && break; sleep 0.2; done
         [[ "$(cat "$home/dev-calls" 2>/dev/null)" == "update --check" ]] || { echo "    $sh did not run the check"; return 1; }
+        # Turned off in the local overrides: silent even when behind.
+        printf '3\n' >"$state/update-check"
+        printf 'export DEVENV_NO_UPDATE_CHECK=1\n' | tee "$home/.zshrc.local" >"$home/.bashrc.local"
+        out="$(shell_output "$sh" true)"
+        rm -f "$home/.zshrc.local" "$home/.bashrc.local"
+        [[ -z "$out" ]] || { echo "    $sh ignored DEVENV_NO_UPDATE_CHECK in its local overrides:"; echo "$out"; return 1; }
         # Up to date and checked recently: silent, and no check.
         printf '0\n' >"$state/update-check"
         rm -f "$home/dev-calls"
@@ -339,6 +345,20 @@ test_dev_profile_reads_the_selection_from_a_real_chezmoi_config() {
     done
     # Effective: the dev profile without go, plus cloud and the python it needs.
     grep -q 'components: docker,devtools,node,python,rust,cloud' <<<"$out" || { echo "$out"; return 1; }
+}
+
+test_dev_knows_the_same_components_as_the_config_template() {
+    local template cli
+    template="$(sed -n 's/.*\$known := list \(.*\) -}}.*/\1/p' "$repo/home/.chezmoi.toml.tmpl" | tr -d '"' | tr ' ' '\n' | sort)"
+    cli="$("$DEV" add --help | sed -n 's/.*Add components (\([^)]*\)).*/\1/p' | head -1 | tr -d ' ' | tr ',' '\n' | sort)"
+    [[ -n "$template" && "$template" == "$cli" ]] || { echo "    template: ${template//$'\n'/ }"; echo "    dev:      ${cli//$'\n'/ }"; return 1; }
+}
+
+test_bootstrap_help_works_when_piped_into_sh() {
+    local out
+    out="$(sh -s -- --help <"$repo/install.sh")"
+    grep -q 'DEVENV_DEV_BIN' <<<"$out" || { echo "$out"; return 1; }
+    grep -q 'dev setup --help' <<<"$out" || { echo "$out"; return 1; }
 }
 
 test_profile_defaults_to_dev_but_full_when_migrating_from_v1() {

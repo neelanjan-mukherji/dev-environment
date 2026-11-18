@@ -34,6 +34,9 @@ func (u ui) info(s string) { fmt.Fprintf(u.w, "    %s\n", s) }
 func (u ui) warn(s string) { fmt.Fprintf(u.w, "    %s\n", u.warnS.Render("! "+s)) }
 func (u ui) raw(s string)  { fmt.Fprint(u.w, s) }
 
+// command shows a command before it runs.
+func (u ui) command(c string) { fmt.Fprintf(u.w, "    %s\n", u.dim.Render("$ "+c)) }
+
 func (u ui) list(s string) {
 	for _, l := range nonEmptyLines(s) {
 		u.info(l)
@@ -41,15 +44,15 @@ func (u ui) list(s string) {
 }
 
 func (u ui) settings(s Settings) {
-	or := func(v string) string {
+	orNoneDim := func(v string) string {
 		if v == "" {
 			return u.dim.Render("(none)")
 		}
 		return v
 	}
 	u.info("profile:    " + s.Profile)
-	u.info("git name:   " + or(s.Name))
-	u.info("git email:  " + or(s.Email))
+	u.info("git name:   " + orNoneDim(s.Name))
+	u.info("git email:  " + orNoneDim(s.Email))
 }
 
 type status int

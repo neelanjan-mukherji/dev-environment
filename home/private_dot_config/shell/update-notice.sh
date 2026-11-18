@@ -1,7 +1,7 @@
 # The dev-environment update notice, shared by zsh and bash (keep it valid in both).
 # Shows at most what the last check found; checks again in the background once a
 # day. Nothing updates by itself: `dev update` does that when you choose.
-# Turn it off with DEVENV_NO_UPDATE_CHECK=1 (e.g. in ~/.zshrc.local's environment).
+# Turn it off with DEVENV_NO_UPDATE_CHECK=1 (e.g. exported in ~/.zshrc.local or ~/.bashrc.local).
 if [ -z "${DEVENV_NO_UPDATE_CHECK:-}" ] && command -v dev >/dev/null 2>&1; then
     _devenv_check="${XDG_STATE_HOME:-$HOME/.local/state}/dev/update-check"
     if [ -s "$_devenv_check" ]; then

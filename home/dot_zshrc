@@ -55,9 +55,10 @@ command -v zoxide >/dev/null && eval "$(zoxide init zsh)"
 command -v fzf >/dev/null && eval "$(fzf --zsh)"
 command -v starship >/dev/null && eval "$(starship init zsh)"
 
-# Says when the repo has updates (never updates by itself)
-source "$HOME/.config/shell/update-notice.sh"
-
 # Local overrides
 [[ -f "$HOME/.zshrc.local" ]] && source "$HOME/.zshrc.local"
+
+# Says when the repo has updates (never updates by itself). After the local
+# overrides, so DEVENV_NO_UPDATE_CHECK=1 there turns it off.
+source "$HOME/.config/shell/update-notice.sh"
 return 0

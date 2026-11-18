@@ -33,7 +33,7 @@ const selectionTemplate = `{{ .profile }}
 func readSelection(ctx context.Context, r sys.Runner) (selection, error) {
 	out, err := r.Run(ctx, sys.Command("chezmoi", "execute-template", selectionTemplate))
 	if err != nil {
-		return selection{}, fmt.Errorf("this machine was never set up; run `dev setup` first (%s)", strings.TrimSpace(out))
+		return selection{}, fmt.Errorf("%w (%s)", errNotSetUp, strings.TrimSpace(out))
 	}
 	l := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	for len(l) < 6 {
@@ -87,8 +87,8 @@ type ChangeOptions struct {
 // component is a mise tool for this machine only, kept in
 // ~/.config/mise/conf.d/local.toml where chezmoi does not touch it.
 func Change(ctx context.Context, co ChangeOptions, d Deps) error {
-	if co.Profile != "" && !slices.ContainsFunc(Profiles, func(p struct{ Name, Summary string }) bool { return p.Name == co.Profile }) {
-		return fmt.Errorf("unknown profile %q (known: minimal, dev, full)", co.Profile)
+	if co.Profile != "" && !slices.Contains(ProfileNames(), co.Profile) {
+		return fmt.Errorf("unknown profile %q (known: %s)", co.Profile, strings.Join(ProfileNames(), ", "))
 	}
 	s, err := readSelection(ctx, d.Runner)
 	if err != nil {
@@ -98,39 +98,28 @@ func Change(ctx context.Context, co ChangeOptions, d Deps) error {
 	if err != nil {
 		return err
 	}
-	prependPath(r.bin, filepath.Join(r.home, ".local/share/mise/shims"))
 
-	var addC, removeC, addT, removeT []string
-	for _, x := range co.Add {
-		if slices.Contains(KnownComponents, x) {
-			addC = append(addC, x)
-		} else {
-			addT = append(addT, x)
-		}
-	}
-	for _, x := range co.Remove {
-		if slices.Contains(KnownComponents, x) {
-			removeC = append(removeC, x)
-		} else {
-			removeT = append(removeT, x)
-		}
-	}
+	addComponents, addTools := splitComponents(co.Add)
+	removeComponents, removeTools := splitComponents(co.Remove)
 
 	local := filepath.Join(r.home, ".config/mise/conf.d/local.toml")
-	if len(addT) > 0 {
-		r.ui.step("Adding " + strings.Join(addT, ", ") + " to this machine (" + local + ")")
-		if err := r.attached(ctx, nil, "mise", append([]string{"use", "--path", local}, addT...)...); err != nil {
+	if len(addTools) > 0 {
+		r.ui.step("Adding " + strings.Join(addTools, ", ") + " to this machine (" + local + ")")
+		if err := r.attached(ctx, nil, "mise", append([]string{"use", "--path", local}, addTools...)...); err != nil {
 			return err
 		}
 	}
-	if len(removeT) > 0 {
-		r.ui.step("Removing " + strings.Join(removeT, ", ") + " from this machine")
-		if err := r.attached(ctx, nil, "mise", append([]string{"unuse", "--path", local}, removeT...)...); err != nil {
+	if len(removeTools) > 0 {
+		r.ui.step("Removing " + strings.Join(removeTools, ", ") + " from this machine")
+		if err := r.attached(ctx, nil, "mise", append([]string{"unuse", "--path", local}, removeTools...)...); err != nil {
 			return err
 		}
 	}
-	if co.Profile == "" && len(addC)+len(removeC) == 0 {
+	if co.Profile == "" && len(addComponents)+len(removeComponents) == 0 {
 		return nil
+	}
+	if hasV1Links(r.home) {
+		return errV1
 	}
 
 	profile := s.profile
@@ -143,21 +132,33 @@ func Change(ctx context.Context, co ChangeOptions, d Deps) error {
 		base = nil // unknown here; keep explicit overrides for the new profile
 	}
 	add, remove := slices.Clone(s.add), slices.Clone(s.remove)
-	for _, c := range addC {
+	for _, c := range addComponents {
 		remove = without(remove, c)
 		if !slices.Contains(add, c) && !slices.Contains(base, c) {
 			add = append(add, c)
 		}
 	}
-	for _, c := range removeC {
+	for _, c := range removeComponents {
 		add = without(add, c)
 		if !slices.Contains(remove, c) && (base == nil || slices.Contains(base, c)) {
 			remove = append(remove, c)
 		}
 	}
-	r.o = Options{Source: s.repo, Profile: profile, Add: add, Remove: remove, Yes: co.Yes, setComponents: true}
+	r.opts = Options{Source: s.repo, Profile: profile, Add: add, Remove: remove, Yes: co.Yes, setComponents: true}
 	r.reconfigure = true
 	return r.steps(ctx, r.configure, r.review, r.applyAndSummarise)
+}
+
+// splitComponents separates known components from mise tool names.
+func splitComponents(names []string) (components, tools []string) {
+	for _, x := range names {
+		if slices.Contains(KnownComponents, x) {
+			components = append(components, x)
+		} else {
+			tools = append(tools, x)
+		}
+	}
+	return components, tools
 }
 
 func without(list []string, x string) []string {

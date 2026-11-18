@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -14,17 +16,21 @@ import (
 	"github.com/neelanjan-mukherji/dev-environment/cli/internal/sys"
 )
 
-// Machine is what this machine was configured with (chezmoi data).
+// Machine is what this machine was configured with (chezmoi data), and where
+// its install steps keep their state.
 type Machine struct {
 	Profile    string
 	Components []string
 	Email      string
+	Flavor     string // catppuccin flavor, e.g. "mocha"
+	State      string // ~/.local/state/dev
 }
 
 // machineTemplate prints one Machine field per line.
 const machineTemplate = `{{ .profile }}
 {{ includeTemplate "components" . }}
 {{ .email }}
+{{ .theme.flavor }}
 `
 
 // ReadMachine asks chezmoi for this machine's configuration.
@@ -34,55 +40,86 @@ func ReadMachine(ctx context.Context, r sys.Runner) (Machine, error) {
 		return Machine{}, fmt.Errorf("reading the machine config with chezmoi (has setup run?): %w\n%s", err, out)
 	}
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	for len(lines) < 3 {
+	for len(lines) < 4 {
 		lines = append(lines, "")
 	}
-	m := Machine{Profile: lines[0], Email: lines[2]}
+	m := Machine{Profile: lines[0], Email: lines[2], Flavor: lines[3], State: stateDir()}
 	if lines[1] != "" {
 		m.Components = strings.Split(lines[1], ",")
 	}
 	return m, nil
 }
 
-// Check is one assertion, run as a shell snippet. Interactive zsh/bash checks see
-// exactly what the user's shells see (PATH, aliases, plugins).
-type Check struct {
-	Name   string
-	Shell  string // "zsh -i", "bash -i" or "bash"
-	Script string
+func stateDir() string {
+	if x := os.Getenv("XDG_STATE_HOME"); x != "" {
+		return filepath.Join(x, "dev")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local/state/dev")
 }
 
-func (c Check) command() (string, []string) {
-	switch c.Shell {
-	case "zsh -i":
-		return "zsh", []string{"-ic", c.Script}
-	case "bash -i":
-		return "bash", []string{"-ic", c.Script}
-	default:
-		return "bash", []string{"-c", c.Script}
+// shell is what a check's script runs in.
+type shell struct{ name, flag string }
+
+var (
+	// Interactive zsh/bash see exactly what the user's shells see (PATH, aliases, plugins).
+	interactiveZsh  = shell{"zsh", "-ic"}
+	interactiveBash = shell{"bash", "-ic"}
+	plainBash       = shell{"bash", "-c"}
+)
+
+// Check is one assertion, run as a shell snippet.
+type Check struct {
+	Name   string
+	Shell  shell
+	Script string
+	// Skipped reports whether the install step behind this check was skipped
+	// on purpose (no sudo, declined); then a failure is reported as a skip.
+	Skipped func() bool
+}
+
+func zsh(name, script string) Check  { return Check{Name: name, Shell: interactiveZsh, Script: script} }
+func bash(name, script string) Check { return Check{Name: name, Shell: plainBash, Script: script} }
+
+// shellQuote quotes s for a POSIX shell.
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// skippedStep reports whether a step was recorded as skipped: a line in
+// skipped.log starting with prefix, or the step's "declined" marker.
+func skippedStep(state, prefix, marker string) func() bool {
+	return func() bool {
+		if _, err := os.Stat(filepath.Join(state, marker)); err == nil {
+			return true
+		}
+		log, _ := os.ReadFile(filepath.Join(state, "skipped.log"))
+		for _, l := range strings.Split(string(log), "\n") {
+			if _, entry, ok := strings.Cut(l, "\t"); ok && strings.HasPrefix(strings.ToLower(entry), prefix) {
+				return true
+			}
+		}
+		return false
 	}
 }
 
-func zsh(name, script string) Check  { return Check{name, "zsh -i", script} }
-func bash(name, script string) Check { return Check{name, "bash", script} }
-
 var coreTools = []string{"rg", "fd", "bat", "eza", "fzf", "zoxide", "starship", "jq", "jless", "lazygit", "yazi", "duf", "gh", "nvim", "tmux", "btop"}
 
-// componentTools lists the commands each component puts on PATH. The first one
-// is also how the doctor tells that mise does not manage a disabled component.
+// componentTools lists the commands each component puts on PATH. For mise
+// components the first one is also how the doctor tells that mise does not
+// manage a disabled component; Docker is a system package.
 var componentTools = []struct {
 	name  string
 	tools []string
+	mise  bool
 }{
-	{"devtools", []string{"kondo"}},
-	{"node", []string{"node", "npm"}},
-	{"python", []string{"python", "uv"}},
-	{"go", []string{"go"}},
-	{"rust", []string{"cargo"}},
-	{"docker", []string{"docker"}},
-	{"java", []string{"java", "mvn", "gradle", "spring"}},
-	{"kubernetes", []string{"kubectl", "helm", "k9s"}},
-	{"cloud", []string{"aws", "gcloud", "az"}},
+	{"devtools", []string{"kondo"}, true},
+	{"node", []string{"node", "npm"}, true},
+	{"python", []string{"python", "uv"}, true},
+	{"go", []string{"go"}, true},
+	{"rust", []string{"cargo"}, true},
+	{"docker", []string{"docker"}, false},
+	{"java", []string{"java", "mvn", "gradle", "spring"}, true},
+	{"kubernetes", []string{"kubectl", "helm", "k9s"}, true},
+	{"cloud", []string{"aws", "gcloud", "az"}, true},
 }
 
 // Checks returns every check that applies to m.
@@ -96,12 +133,13 @@ func Checks(m Machine) []Check {
 		zsh("zinit plugins load", `whence -w zinit | grep -q function`),
 		bash("tmux plugin manager present", `test -x "$HOME/.tmux/plugins/tpm/tpm"`),
 		bash("neovim plugins restored", `test -d "$HOME/.local/share/nvim/lazy/telescope.nvim"`),
-		zsh("bat theme compiled", `bat --list-themes | grep -q "Catppuccin Mocha"`),
-		Check{"bash fallback has tools + aliases", "bash -i", `command -v starship && command -v rg && alias gs`},
-		bash("login shell is zsh", `getent passwd "$(id -un)" | cut -d: -f7 | grep -q zsh`),
+		zsh("bat theme compiled", "bat --list-themes | grep -q "+shellQuote("Catppuccin "+title(m.Flavor))),
+		Check{Name: "bash fallback has tools + aliases", Shell: interactiveBash, Script: `command -v starship && command -v rg && alias gs`},
+		Check{Name: "login shell is zsh", Shell: plainBash, Script: `getent passwd "$(id -un)" | cut -d: -f7 | grep -q zsh`,
+			Skipped: skippedStep(m.State, "login shell", "login-shell.declined")},
 	)
 	if m.Email != "" {
-		cs = append(cs, bash("git identity from .gitconfig.local", fmt.Sprintf(`[ "$(git config user.email)" = %q ]`, m.Email)))
+		cs = append(cs, bash("git identity from .gitconfig.local", `[ "$(git config user.email)" = `+shellQuote(m.Email)+` ]`))
 	}
 
 	on := func(c string) bool { return slices.Contains(m.Components, c) }
@@ -110,7 +148,7 @@ func Checks(m Machine) []Check {
 			for _, t := range c.tools {
 				cs = append(cs, zsh("zsh has "+t, "command -v "+t))
 			}
-		} else if c.name != "docker" { // Docker is a system package, not a mise tool.
+		} else if c.mise {
 			cs = append(cs, zsh("mise does not manage "+c.name, "! mise which "+c.tools[0]))
 		}
 	}
@@ -152,8 +190,7 @@ func Run(ctx context.Context, r sys.Runner, checks []Check, w io.Writer) (failed
 		go func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			name, args := c.command()
-			out, err := r.Run(ctx, sys.Command(name, args...))
+			out, err := r.Run(ctx, sys.Command(c.Shell.name, c.Shell.flag, c.Script))
 			results[i] <- result{out, err}
 		}()
 	}
@@ -161,10 +198,17 @@ func Run(ctx context.Context, r sys.Runner, checks []Check, w io.Writer) (failed
 	style := lipgloss.NewRenderer(w)
 	okStyle := style.NewStyle().Foreground(lipgloss.Color("2"))
 	failStyle := style.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
+	skipStyle := style.NewStyle().Foreground(lipgloss.Color("3"))
+	skipped := 0
 	for i, c := range checks {
 		res := <-results[i]
 		if res.err == nil {
 			fmt.Fprintf(w, "%s   %s\n", okStyle.Render("ok"), c.Name)
+			continue
+		}
+		if c.Skipped != nil && c.Skipped() {
+			skipped++
+			fmt.Fprintf(w, "%s %s (the install step was skipped; see skipped.log)\n", skipStyle.Render("skip"), c.Name)
 			continue
 		}
 		failed++
@@ -173,8 +217,20 @@ func Run(ctx context.Context, r sys.Runner, checks []Check, w io.Writer) (failed
 			fmt.Fprintf(w, "    %s\n", l)
 		}
 	}
-	fmt.Fprintf(w, "---- %d passed, %d failed\n", len(checks)-failed, failed)
+	fmt.Fprintf(w, "---- %d passed, %d failed", len(checks)-failed-skipped, failed)
+	if skipped > 0 {
+		fmt.Fprintf(w, ", %d skipped", skipped)
+	}
+	fmt.Fprintln(w)
 	return failed
+}
+
+// title is "Mocha" for "mocha".
+func title(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 func lastLines(s string, n int) []string {

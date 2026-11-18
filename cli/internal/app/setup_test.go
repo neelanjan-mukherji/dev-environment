@@ -3,6 +3,7 @@ package app_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -317,12 +318,126 @@ func TestMigrateV1RunsSetupWithTheMigration(t *testing.T) {
 	if err := os.Symlink("../dotfiles/nvim/.config/nvim", filepath.Join(b.home, ".config/nvim")); err != nil {
 		t.Fatal(err)
 	}
-	r := &fakeRunner{rules: []rule{rendered("full", "", "")}}
+	r := &fakeRunner{rules: []rule{rendered("full", "", ""),
+		{match: "migrate-v1.sh", do: func() { os.Remove(filepath.Join(b.home, ".config/nvim")) }}}}
 	if out, code := run(t, r, nil, "migrate-v1", "--yes", "--source", b.repo); code != 0 {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	migrate := r.called("bash " + filepath.Join(b.state, "migrate-v1.sh"))
 	if migrate < 0 || r.called("chezmoi apply") < migrate {
 		t.Fatalf("want the migration, then apply; calls:\n%s", r.log())
+	}
+}
+
+func TestSetupDecliningTheReviewKeepsThePreviousSettings(t *testing.T) {
+	b := newBox(t)
+	b.configured(t)
+	cfg := filepath.Join(b.home, ".config/chezmoi/chezmoi.toml")
+	before := read(t, cfg)
+	r := &fakeRunner{rules: []rule{
+		rendered("dev", "", ""),
+		{match: "chezmoi init", do: func() { write(t, cfg, "[data]\nprofile = \"full\"\n") }},
+		{match: "chezmoi status", out: " M .zshrc\n"},
+	}}
+	p := &fakePrompter{answers: map[string]bool{"Use these settings": false, "Apply": false},
+		edit: func(s setup.Settings) setup.Settings { s.Profile = "full"; return s }}
+	if out, code := run(t, r, p, "setup", "--source", b.repo); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if got := read(t, cfg); got != before {
+		t.Fatalf("declined, but the machine config changed to:\n%s", got)
+	}
+}
+
+func TestSetupOnAFreshMachineDecliningLeavesNoConfig(t *testing.T) {
+	b := newBox(t)
+	cfg := filepath.Join(b.home, ".config/chezmoi/chezmoi.toml")
+	r := &fakeRunner{rules: []rule{
+		rendered("dev", "", ""),
+		{match: "chezmoi init", do: func() { write(t, cfg, "[data]\n") }},
+		{match: "chezmoi status", out: " A .zshrc\n"},
+	}}
+	p := &fakePrompter{answers: map[string]bool{"Apply": false}}
+	if out, code := run(t, r, p, "setup", "--source", b.repo); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if _, err := os.Stat(cfg); !os.IsNotExist(err) {
+		t.Fatalf("declined on a fresh machine, but %s exists", cfg)
+	}
+}
+
+func TestSetupCanShowTheDiffBeforeAnswering(t *testing.T) {
+	b := newBox(t)
+	b.configured(t)
+	r := &fakeRunner{rules: []rule{rendered("dev", "", ""), {match: "chezmoi status", out: " M .zshrc\n"}, {match: "chezmoi diff", out: "+new line\n"}}}
+	p := &fakePrompter{answers: map[string]bool{"Use these settings": true, "Apply": true}, explainFirst: map[string]bool{"Apply": true}}
+	out, code := run(t, r, p, "setup", "--source", b.repo)
+	if code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	diff, apply := r.called("chezmoi diff"), r.called("chezmoi apply")
+	if diff < 0 || apply < diff || !strings.Contains(out, "+new line") {
+		t.Fatalf("want the diff shown, then the question again, then apply\n%s\ncalls:\n%s", out, r.log())
+	}
+}
+
+func TestSetupAsksBeforeRunningAnInstallerScript(t *testing.T) {
+	b := newBox(t)
+	r := &fakeRunner{rules: []rule{rendered("dev", "", ""), {match: "command -v mise", fail: true}}}
+	p := &fakePrompter{answers: map[string]bool{"mise": false}}
+	run(t, r, p, "setup", "--source", b.repo)
+	if r.called("mise.run") >= 0 {
+		t.Fatalf("ran the mise installer although declined; calls:\n%s", r.log())
+	}
+	if !slices.ContainsFunc(p.asked, func(q setup.Question) bool { return strings.Contains(q.Text, "mise") && q.Explain != "" }) {
+		t.Fatalf("no question (with the command on offer) before installing mise: %+v", p.asked)
+	}
+}
+
+func TestSetupRefusesToApplyOverV1Links(t *testing.T) {
+	b := newBox(t)
+	b.configured(t)
+	write(t, filepath.Join(b.home, "dotfiles/zsh/.zshrc"), "# v1\n")
+	if err := os.Symlink(filepath.Join(b.home, "dotfiles/zsh/.zshrc"), filepath.Join(b.home, ".zshrc")); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"setup", "--resume", "--yes"}, {"add", "docker", "--yes"}, {"update", "--yes"}} {
+		r := &fakeRunner{rules: []rule{rendered("dev", "", ""), current("dev", devBase, "", "", devBase, b.repo), sourceAt(b.repo)}}
+		out, code := run(t, r, nil, args...)
+		if code == 0 || r.called("chezmoi apply") >= 0 || !strings.Contains(out, "migrate-v1") {
+			t.Errorf("%v: exit %d, want a refusal pointing at migrate-v1 and no apply\n%s\ncalls:\n%s", args, code, out, r.log())
+		}
+	}
+}
+
+func TestSetupResumeBacksUpAndAsksBeforeOverwriting(t *testing.T) {
+	b := newBox(t)
+	b.configured(t)
+	write(t, filepath.Join(b.home, ".zshrc"), "edited by hand\n")
+	r := &fakeRunner{rules: []rule{{match: "chezmoi status", out: " M .zshrc\n"}}}
+	p := &fakePrompter{answers: map[string]bool{"Apply": false}}
+	run(t, r, p, "setup", "--resume")
+	if r.called("chezmoi apply") >= 0 {
+		t.Fatalf("resume overwrote without asking; calls:\n%s", r.log())
+	}
+	if backups, _ := filepath.Glob(filepath.Join(b.home, ".dotfiles-backup/*/.zshrc")); len(backups) != 1 {
+		t.Fatalf("no backup before resuming: %v", backups)
+	}
+}
+
+func TestSetupIdentityStepsCanBeChosenUpFront(t *testing.T) {
+	b := newBox(t)
+	r := &fakeRunner{rules: []rule{rendered("dev", "", "1+me@users.noreply.github.com"), {match: "gh auth status", fail: true}}}
+	if out, code := run(t, r, nil, "setup", "--yes", "--ssh-key", "--github", "--source", b.repo); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if r.called("ssh-keygen") < 0 || r.called("gh auth login") < 0 {
+		t.Fatalf("--ssh-key/--github did not run their steps; calls:\n%s", r.log())
+	}
+	r = &fakeRunner{rules: []rule{rendered("dev", "", ""), {match: "gh auth status", fail: true}}}
+	p := &fakePrompter{answers: map[string]bool{"Apply": true, "SSH key": true, "Log in": true}}
+	run(t, r, p, "setup", "--skip-identity", "--source", b.repo)
+	if r.called("ssh-keygen") >= 0 || r.called("gh auth") >= 0 {
+		t.Fatalf("--skip-identity still ran identity steps; calls:\n%s", r.log())
 	}
 }

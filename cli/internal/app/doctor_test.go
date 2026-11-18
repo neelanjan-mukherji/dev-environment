@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -9,7 +10,11 @@ import (
 // machine answers the doctor's question "which profile, components and email?"
 // the way `chezmoi execute-template` does on a configured machine.
 func machine(profile, components, email string) rule {
-	return rule{match: "execute-template", out: profile + "\n" + components + "\n" + email + "\n"}
+	return machineWith(profile, components, email, "mocha")
+}
+
+func machineWith(profile, components, email, flavor string) rule {
+	return rule{match: "execute-template", out: profile + "\n" + components + "\n" + email + "\n" + flavor + "\n"}
 }
 
 const fullComponents = "docker,devtools,node,python,go,rust,kubernetes,java"
@@ -83,7 +88,33 @@ func TestDoctorChecksGitIdentityOnlyWhenOneWasConfigured(t *testing.T) {
 	}
 	r := &fakeRunner{rules: []rule{machine("minimal", "", "me@example.com")}}
 	doctor(t, r)
-	if !slices.ContainsFunc(r.calls, func(c string) bool { return strings.Contains(c, `"me@example.com"`) }) {
+	if !slices.ContainsFunc(r.calls, func(c string) bool { return strings.Contains(c, `'me@example.com'`) }) {
 		t.Errorf("git identity not compared with the configured email; calls:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestDoctorChecksTheBatThemeOfTheConfiguredFlavor(t *testing.T) {
+	r := &fakeRunner{rules: []rule{machineWith("minimal", "", "", "latte")}}
+	doctor(t, r)
+	if r.called("Catppuccin Latte") < 0 || r.called("Catppuccin Mocha") >= 0 {
+		t.Fatalf("bat theme check ignores the flavor; calls:\n%s", r.log())
+	}
+}
+
+func TestDoctorReportsARecordedSkipAsSkippedNotFailed(t *testing.T) {
+	b := newBox(t)
+	write(t, filepath.Join(b.state, "skipped.log"), "2026-11-18 10:00:00\tLogin shell: no sudo\n")
+	r := &fakeRunner{rules: []rule{machine("minimal", "", ""), {match: "login shell", fail: true}, {match: "cut -d: -f7", fail: true}}}
+	out, code := doctor(t, r)
+	if code != 0 || !strings.Contains(out, "skip login shell is zsh") {
+		t.Fatalf("exit %d, want the login shell reported as skipped\n%s", code, out)
+	}
+}
+
+func TestDoctorQuotesTheEmailForTheShell(t *testing.T) {
+	r := &fakeRunner{rules: []rule{machine("minimal", "", "a$(touch x)@example.com")}}
+	doctor(t, r)
+	if r.called(`'a$(touch x)@example.com'`) < 0 {
+		t.Fatalf("email not single-quoted; calls:\n%s", r.log())
 	}
 }

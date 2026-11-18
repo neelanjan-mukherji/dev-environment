@@ -22,6 +22,12 @@ type Options struct {
 	Theme   string   `yaml:"theme"`
 	Yes     bool     `yaml:"yes"`
 
+	// Identity steps. A person is asked about each one; with --yes they run only
+	// when chosen here.
+	SSHKey       bool `yaml:"ssh_key"`       // create ~/.ssh/id_ed25519 if missing
+	GitHub       bool `yaml:"github"`        // gh auth login, then add the key to the account
+	SkipIdentity bool `yaml:"skip_identity"` // don't offer them at all
+
 	DryRun bool `yaml:"-"`
 	Resume bool `yaml:"-"`
 
@@ -59,13 +65,42 @@ var Profiles = []struct{ Name, Summary string }{
 	{"full", "dev + Kubernetes and Java"},
 }
 
+// Question is a yes/no question. When Explain is set it names a third answer
+// ("Show the diff", "Show the command") that shows more and asks again.
+type Question struct {
+	Text    string
+	Explain string
+}
+
+// Answer to a Question.
+type Answer int
+
+const (
+	No Answer = iota
+	Yes
+	Explain
+)
+
+// ProfileNames lists the profiles in order.
+func ProfileNames() []string {
+	var names []string
+	for _, p := range Profiles {
+		names = append(names, p.Name)
+	}
+	return names
+}
+
 // Prompter is the person at the terminal.
 type Prompter interface {
 	// Interactive reports whether there is anyone to ask.
 	Interactive() bool
-	Confirm(question string) (bool, error)
+	Ask(Question) (Answer, error)
 	EditSettings(Settings) (Settings, error)
 }
+
+// blank is how dev tells the config template "empty on purpose": a value that
+// is set (so the template neither asks nor falls back to a default) and trims to "".
+const blank = " "
 
 // env turns the options into the DEVENV_* variables the chezmoi config template reads.
 func (o Options) env() []string {
@@ -83,7 +118,7 @@ func (o Options) env() []string {
 		case len(v) > 0:
 			env = append(env, k+"="+strings.Join(v, ","))
 		case o.setComponents:
-			env = append(env, k+"= ") // a single space: "none" to the template
+			env = append(env, k+"="+blank)
 		}
 	}
 	list("DEVENV_ADD", o.Add)

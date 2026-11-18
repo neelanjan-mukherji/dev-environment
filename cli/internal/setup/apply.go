@@ -18,6 +18,11 @@ import (
 // steps. failed.log keeps only the latest run, so `dev doctor`'s "no step
 // failed" means the last run was clean.
 func (r *run) apply(ctx context.Context, extra ...string) (skipped, failed []string, err error) {
+	if hasV1Links(r.home) {
+		return nil, nil, errV1
+	}
+	// From here on the new machine config is in use; a failure doesn't undo it.
+	r.applied()
 	if err := os.MkdirAll(r.state, 0o755); err != nil {
 		return nil, nil, err
 	}
@@ -43,6 +48,9 @@ func (r *run) apply(ctx context.Context, extra ...string) (skipped, failed []str
 func (r *run) applyAndSummarise(ctx context.Context) error {
 	r.ui.step("Applying")
 	skipped, failed, err := r.apply(ctx)
+	if errors.Is(err, errV1) {
+		return err
+	}
 	r.ui.step("Summary")
 	r.ui.summary(scriptRows(skipped, failed))
 	if len(skipped) > 0 {
@@ -132,48 +140,59 @@ func copyFile(src, dst string) error {
 }
 
 // identity offers the steps that make the machine usable with GitHub: an SSH
-// key, a gh login and the key on the account. Each one is skippable, and they
-// need a person (a passphrase, a browser), so --yes only prints what is left.
+// key, a gh login and the key on the account. A person is asked about each; with
+// --yes only the ones chosen with --ssh-key / --github run, and the rest are
+// listed as next steps.
 func (r *run) identity(ctx context.Context) error {
-	key := filepath.Join(r.home, ".ssh/id_ed25519")
-	email := r.settings.Email
-	_, ghErr := r.Runner.Run(ctx, sys.Command("gh", "auth", "status"))
-	loggedIn := ghErr == nil
-
-	if r.o.Yes {
-		if !loggedIn {
-			r.ui.info("Next: `gh auth login` to use GitHub from this machine.")
-		}
-		if !exists(key) {
-			r.ui.info("No SSH key yet; `dev setup` (without --yes) offers to create one.")
-		}
+	if r.opts.SkipIdentity {
 		return nil
 	}
+	key := filepath.Join(r.home, ".ssh/id_ed25519")
+	pub := key + ".pub"
+	_, ghErr := r.Runner.Run(ctx, sys.Command("gh", "auth", "status"))
+	loggedIn := ghErr == nil
+	// want asks a person, or under --yes follows the flag.
+	want := func(chosen bool, q string) (bool, error) {
+		if r.opts.Yes {
+			return chosen, nil
+		}
+		return r.confirm(Question{Text: q}, nil)
+	}
+
 	r.ui.step("GitHub access")
 	if !exists(key) {
-		if ok, err := r.Prompter.Confirm("Create an SSH key (" + key + ")? ssh-keygen asks for a passphrase."); err != nil {
+		ok, err := want(r.opts.SSHKey, "Create an SSH key ("+key+")? ssh-keygen asks for a passphrase.")
+		if err != nil {
 			return err
-		} else if ok {
+		}
+		if ok {
 			if err := os.MkdirAll(filepath.Dir(key), 0o700); err != nil {
 				return err
 			}
-			if err := r.attached(ctx, nil, "ssh-keygen", "-t", "ed25519", "-C", email, "-f", key); err != nil {
+			r.ui.command("ssh-keygen -t ed25519 -C " + r.settings.Email + " -f " + key)
+			if err := r.attached(ctx, nil, "ssh-keygen", "-t", "ed25519", "-C", r.settings.Email, "-f", key); err != nil {
 				r.ui.warn("ssh-keygen failed: " + err.Error())
 			}
+		} else if r.opts.Yes {
+			r.ui.info("No SSH key yet: `dev setup --ssh-key`, or `dev setup` to be asked.")
 		}
 	}
 	if !loggedIn {
-		if ok, err := r.Prompter.Confirm("Log in to GitHub with gh (opens a browser or shows a code)?"); err != nil {
+		ok, err := want(r.opts.GitHub, "Log in to GitHub with gh (opens a browser or shows a code)?")
+		if err != nil {
 			return err
-		} else if ok {
+		}
+		if ok {
+			r.ui.command("gh auth login --git-protocol ssh --skip-ssh-key")
 			if err := r.attached(ctx, nil, "gh", "auth", "login", "--git-protocol", "ssh", "--skip-ssh-key"); err != nil {
 				r.ui.warn("gh auth login failed: " + err.Error())
 			} else {
 				loggedIn = true
 			}
+		} else if r.opts.Yes {
+			r.ui.info("Next: `gh auth login` to use GitHub from this machine.")
 		}
 	}
-	pub := key + ".pub"
 	if !loggedIn || !exists(pub) {
 		return nil
 	}
@@ -184,10 +203,11 @@ func (r *run) identity(ctx context.Context) error {
 	if listed, err := r.Runner.Run(ctx, sys.Command("gh", "ssh-key", "list")); err == nil && keyListed(listed, string(material)) {
 		return nil
 	}
-	if ok, err := r.Prompter.Confirm("Add the SSH key to your GitHub account?"); err != nil || !ok {
+	if ok, err := want(r.opts.GitHub, "Add the SSH key to your GitHub account?"); err != nil || !ok {
 		return err
 	}
 	host, _ := os.Hostname()
+	r.ui.command("gh ssh-key add " + pub + " --title " + host)
 	if out, err := r.Runner.Run(ctx, sys.Command("gh", "ssh-key", "add", pub, "--title", host)); err != nil {
 		r.ui.warn(fmt.Sprintf("gh ssh-key add failed: %v %s", err, strings.TrimSpace(out)))
 	}

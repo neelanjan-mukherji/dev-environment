@@ -114,3 +114,33 @@ func TestUpdateOnAMachineThatWasNeverSetUp(t *testing.T) {
 		t.Fatalf("exit %d, want a pointer to dev setup\n%s", code, out)
 	}
 }
+
+func TestUpdateReviewsLocallyEditedDotfilesBeforeOverwriting(t *testing.T) {
+	b := newBox(t)
+	b.configured(t)
+	write(t, filepath.Join(b.home, ".zshrc"), "edited by hand\n")
+	r := &fakeRunner{rules: []rule{sourceAt(b.repo), {match: "chezmoi status", out: " M .zshrc\n"}}}
+	p := &fakePrompter{answers: map[string]bool{"Apply": false}}
+	out, _ := run(t, r, p, "update")
+	if r.called("chezmoi apply") >= 0 {
+		t.Fatalf("overwrote edited dotfiles without asking; calls:\n%s", r.log())
+	}
+	if backups, _ := filepath.Glob(filepath.Join(b.home, ".dotfiles-backup/*/.zshrc")); len(backups) != 1 {
+		t.Fatalf("no backup: %v\n%s", backups, out)
+	}
+	if r.called("mise upgrade") < 0 {
+		t.Errorf("declining the dotfiles stopped the other updates; calls:\n%s", r.log())
+	}
+}
+
+func TestUpdateClearsTheNoticeOnceThePullWorkedEvenIfAStepFails(t *testing.T) {
+	b := newBox(t)
+	b.configured(t)
+	check := filepath.Join(b.state, "update-check")
+	write(t, check, "3\n")
+	r := &fakeRunner{rules: []rule{sourceAt(b.repo), {match: "mise upgrade", fail: true}}}
+	run(t, r, nil, "update")
+	if got := strings.TrimSpace(read(t, check)); got != "0" {
+		t.Fatalf("update-check = %q after a successful pull, want 0", got)
+	}
+}
