@@ -11,7 +11,7 @@ lint:
 	shellcheck -s sh install.sh
 	shellcheck ci/*.sh
 
-test:
+test: build
 	ci/test-render.sh $(FILTER)
 
 go-test:

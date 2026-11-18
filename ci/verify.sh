@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Test code is passed as strings to child shells on purpose.
 # shellcheck disable=SC2016
-# Run after install.sh (in a test container, or `make verify` on a real machine):
+# Run after an install (in a test container, or `make verify` on a real machine):
 # `dev doctor` asserts the machine matches its profile; this script adds what only
 # makes sense right after an install: the v1 migration outcome and that a second
 # install is a no-op.
@@ -35,12 +35,13 @@ if [[ -d "$HOME/dotfiles" ]]; then
 fi
 
 # ---- idempotency: a second run changes nothing and re-runs no install step
-second="$("$repo/install.sh" --yes 2>&1)"
+second="$("$dev" setup --yes --source "$repo" 2>&1)"
 check "second install succeeds"   test $? -eq 0
 # Step headers are coloured; strip the escapes before matching.
 # shellcheck disable=SC2001  # needs a regex
 second_plain="$(sed 's/\x1b\[[0-9;]*m//g' <<<"$second")"
 check "second install is a no-op" bash -c '! grep -E "==> (System packages|CLI tools|Docker Engine|Login shell|Theme caches|Retire)" <<<"$1"' _ "$second_plain"
+check "update check runs" bash -c '"$1" update --check && [ -s "${XDG_STATE_HOME:-$HOME/.local/state}/dev/update-check" ]' _ "$dev"
 check "no step failed" test ! -s "${XDG_STATE_HOME:-$HOME/.local/state}/dev/failed.log"
 
 echo "---- $pass passed, $fail failed"

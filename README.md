@@ -8,7 +8,7 @@ machine in sync.
 - **Tools and languages:** [mise](https://mise.jdx.dev): no root needed, per-project versions
 - **Base packages:** the OS package manager
 
-> **Status: v2 milestone 1.** Supported today: Ubuntu / Debian, including WSL 2.
+> **Status: v2 milestone 2.** Supported today: Ubuntu / Debian, including WSL 2.
 > macOS, Fedora/Arch/Alpine and Windows follow. See [docs/v2-design.md](docs/v2-design.md).
 > The v1 Stow-based setup is tagged `v1.0.0`.
 
@@ -18,16 +18,19 @@ machine in sync.
 curl -fsSL https://raw.githubusercontent.com/neelanjan-mukherji/dev-environment/main/install.sh | sh
 ```
 
-Or from a clone:
+`install.sh` only fetches the `dev` CLI (the newest release for your OS/CPU,
+checked against its `checksums.txt`) into `~/.local/bin` and runs `dev setup`.
+From a clone, you can build `dev` yourself instead (needs Go):
 
 ```bash
 git clone https://github.com/neelanjan-mukherji/dev-environment.git ~/dev-environment
-~/dev-environment/install.sh
+~/dev-environment/install.sh --from-source
 ```
 
-The installer is hands-on:
-1. It asks for a profile and your git identity, once per machine. The email
-   defaults to your GitHub noreply address when one can be found.
+`dev setup` is hands-on:
+1. It asks for a profile and your git identity in a short form, once per machine;
+   later runs only confirm them. The email defaults to your GitHub noreply
+   address when one can be found.
 2. On a v1 (Stow) machine it first removes the old symlinks, after asking, and
    suggests the `full` profile. Your `dotfiles/` copy is left untouched.
 3. It shows which files will change and backs up the existing ones to `~/.dotfiles-backup/<timestamp>/`.
@@ -35,15 +38,30 @@ The installer is hands-on:
    shell, docker group, `/etc/wsl.conf`, removing SDKMAN, nvm or old v1 binaries
    once mise replaces them).
 
-Steps it cannot do, for example without sudo, are skipped and listed at the end
-(`~/.local/state/dev/skipped.log`) rather than failing the run. Failed steps are
-listed too (`failed.log`); re-running retries them.
+5. Finally it offers an SSH key, `gh auth login` and adding the key to GitHub.
+   Each is skippable.
+
+A failed step doesn't stop the others. The summary table lists what failed
+(`~/.local/state/dev/failed.log`, latest run only) and what was skipped, for
+example without sudo (`skipped.log`); `dev setup --resume` retries just the
+failed steps.
 
 ```bash
-./install.sh --dry-run                     # show what would change; touches nothing
-./install.sh --yes --profile minimal       # unattended (servers, containers, CI)
-./install.sh --profile dev --add cloud --remove go
-./install.sh --theme latte                 # catppuccin flavor for every tool
+dev setup --dry-run                     # show what would change; touches nothing
+dev setup --yes --profile minimal       # unattended (servers, containers, CI)
+dev setup --profile dev --add cloud --remove go
+dev setup --theme latte                 # catppuccin flavor for every tool
+dev setup --config machine.yaml         # answers from a file; flags win
+```
+
+`machine.yaml` takes the flag names as keys:
+
+```yaml
+profile: dev
+name: Jane Doe
+email: 123+jane@users.noreply.github.com
+add: [cloud]
+yes: true
 ```
 
 ### Profiles
@@ -59,9 +77,16 @@ Toolchains are pinned; small CLI tools track `latest`.
 
 ### Per-machine settings
 
-Answers live in `~/.config/chezmoi/chezmoi.toml` (`profile`, `name`, `email`,
-`[data.components] add/remove`, `[data.theme] flavor`). Edit it, then run
-`chezmoi init && chezmoi apply`.
+```bash
+dev profile                # show the profile and components
+dev profile full           # switch (keeps your add/remove overrides)
+dev add java cloud         # add components...
+dev add terraform@1.9      # ...or any mise tool, for this machine only
+dev remove go
+```
+
+Answers live in `~/.config/chezmoi/chezmoi.toml`; machine-only tools in
+`~/.config/mise/conf.d/local.toml`.
 
 Machine-local files that are never tracked: `~/.gitconfig.local` (identity,
 generated), `~/.zshrc.local`, `~/.bashrc.local`, `~/.profile.local`.
@@ -69,13 +94,15 @@ generated), `~/.zshrc.local`, `~/.bashrc.local`, `~/.profile.local`.
 ## Day to day
 
 ```bash
-chezmoi edit ~/.zshrc      # edit the source in ~/dev-environment/home, then apply
-chezmoi diff               # what would change
-chezmoi apply              # sync this machine with the repo
-chezmoi update             # git pull + apply
-mise upgrade               # newer versions of "latest" tools
+dev update                 # pull, re-apply, upgrade tools within their pins, update plugins
+dev update --system        # ...and OS packages
+dev doctor                 # does this machine match its profile?
+chezmoi edit ~/.zshrc      # edit the source in ~/dev-environment/home, then `chezmoi apply`
 mise use java@corretto-17  # per-project version (writes mise.toml)
 ```
+
+Nothing updates by itself. When the repo has new commits, new shells say so (at
+most once a day; `DEVENV_NO_UPDATE_CHECK=1` turns that off).
 
 Projects with `.nvmrc`, `.node-version`, `.java-version` or `.python-version`
 files are honoured automatically.
@@ -94,6 +121,10 @@ files are honoured automatically.
 ```bash
 make check             # shellcheck, Go tests + render tests (no Docker; never touches $HOME)
 make test FILTER=theme # one render test
+make build             # cli/dist/dev
 make test-containers   # full install + verify in clean Ubuntu/Debian containers
 make verify            # dev doctor + a second-install no-op check against this machine
 ```
+
+Releases: pushing a `v*` tag runs GoReleaser (`.goreleaser.yaml`), which
+publishes `dev_<os>_<arch>.tar.gz` and `checksums.txt` for `install.sh`.

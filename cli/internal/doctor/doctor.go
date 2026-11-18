@@ -29,7 +29,7 @@ const machineTemplate = `{{ .profile }}
 
 // ReadMachine asks chezmoi for this machine's configuration.
 func ReadMachine(ctx context.Context, r sys.Runner) (Machine, error) {
-	out, err := r.Run(ctx, "chezmoi", "execute-template", machineTemplate)
+	out, err := r.Run(ctx, sys.Command("chezmoi", "execute-template", machineTemplate))
 	if err != nil {
 		return Machine{}, fmt.Errorf("reading the machine config with chezmoi (has setup run?): %w\n%s", err, out)
 	}
@@ -153,7 +153,7 @@ func Run(ctx context.Context, r sys.Runner, checks []Check, w io.Writer) (failed
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			name, args := c.command()
-			out, err := r.Run(ctx, name, args...)
+			out, err := r.Run(ctx, sys.Command(name, args...))
 			results[i] <- result{out, err}
 		}()
 	}

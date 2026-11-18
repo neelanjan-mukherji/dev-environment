@@ -50,7 +50,7 @@ Profiles plus per-component overrides; the selection is persisted per machine (c
 - **Scriptable**: every prompt has a flag/config equivalent — `dev setup --profile minimal --yes`, `--config machine.yaml`. Underneath, answers flow to chezmoi as `DEVENV_*` env vars (milestone 1 `install.sh` uses the same mechanism).
 - **No-sudo guardrails**: detect missing sudo, install what is possible user-locally via mise, report what was skipped (`~/.local/state/dev/skipped.log`).
 - **Failure handling**: continue past a failed component, mark it, print a summary table, write a log to `~/.local/state/dev/` (`failed.log`), exit non-zero; `dev setup --resume` retries failures only.
-- Commands: `setup`, `doctor` (same checks as CI), `update`, `add <tool>`, `profile`, `migrate-v1`.
+- Commands: `setup`, `doctor` (same checks as CI), `update`, `add <tool>`, `profile`, `migrate-v1`. (As built: `add`/`remove` take a component, which changes the machine's selection, or any mise tool, which stays machine-local in `~/.config/mise/conf.d/local.toml`. `update` restores Neovim plugins to the repo's `lazy-lock.json` rather than bumping them, so the lock stays pinned.)
 - `dev update`: `chezmoi update` + `mise upgrade` (unpinned) + Zinit/lazy.nvim/TPM plugin updates; OS package upgrades only with `--system`. Shells show a ≤ once-daily notice when the repo is behind; never auto-update.
 - `dev migrate-v1` (auto-offered when v1 Stow links are detected; suggests the `full` profile): remove v1 links → `chezmoi diff` preview → backup → `chezmoi apply` → verify mise Java/Node → only then remove SDKMAN/nvm and v1 copies in `~/.local/bin` / `~/.cargo/bin` (the cargo toolchain itself stays: mise's Rust uses `~/.cargo`). Milestone 1's `install.sh` implements this order without Stow (it removes the links directly).
 
@@ -60,7 +60,7 @@ Profiles plus per-component overrides; the selection is persisted per machine (c
 - Checks: expected tools present, shellcheck, idempotency (second run is a no-op). Same suite runs locally via `dev doctor` / `make test`.
 
 ## Milestones (each tagged and merged to `main` when green)
-1. **Foundation** — chezmoi restructure, `packages.yaml`, mise, v1 parity on Ubuntu/WSL, bash fallback, theme, container CI (Ubuntu/Debian). Migrate this machine.
+1. ✅ **Foundation** (`v2.0.0-alpha.1`) — chezmoi restructure, `packages.yaml`, mise, v1 parity on Ubuntu/WSL, bash fallback, theme, container CI (Ubuntu/Debian). Migrate this machine.
 2. **`dev` CLI** — guided setup, doctor, update, migrate-v1, `--yes`/`--config`, GoReleaser, `install.sh`.
 3. **macOS** — Homebrew, Colima, WezTerm + font, macOS CI.
 4. **More Linux** — Fedora, Arch, Alpine minimal, no-sudo mode, arm64 CI.

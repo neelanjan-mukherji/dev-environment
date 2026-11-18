@@ -22,7 +22,8 @@ for base in "${bases[@]}"; do
         echo "######## $base / $profile"
         setup="--profile $profile"
         [[ $profile == full ]] && setup="" && echo "(starting from a v1 Stow home)"
-        if docker run --rm -e GITHUB_TOKEN -e MISE_GITHUB_TOKEN="${GITHUB_TOKEN:-}" "$tag" bash -c "
+        if docker run --rm -e GITHUB_TOKEN -e MISE_GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
+            -e DEVENV_DEV_BIN=/home/dev/dev-environment/cli/dist/dev "$tag" bash -c "
             { [[ -z '$setup' ]] && ./dev-environment/ci/seed-v1.sh || true; } &&
             ./dev-environment/install.sh --yes $setup --name 'CI User' --email ci@example.com &&
             ./dev-environment/ci/verify.sh"; then

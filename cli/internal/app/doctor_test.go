@@ -1,46 +1,10 @@
 package app_test
 
 import (
-	"bytes"
-	"context"
-	"errors"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
-
-	"github.com/neelanjan-mukherji/dev-environment/cli/internal/app"
 )
-
-// fakeRunner stands in for the machine: every command succeeds with empty
-// output unless a rule whose substring occurs in the command line says otherwise.
-type fakeRunner struct {
-	rules []rule
-	mu    sync.Mutex
-	calls []string
-}
-
-type rule struct {
-	match string
-	out   string
-	fail  bool
-}
-
-func (f *fakeRunner) Run(_ context.Context, name string, args ...string) (string, error) {
-	line := strings.Join(append([]string{name}, args...), " ")
-	f.mu.Lock()
-	f.calls = append(f.calls, line)
-	f.mu.Unlock()
-	for _, r := range f.rules {
-		if strings.Contains(line, r.match) {
-			if r.fail {
-				return r.out, errors.New("exit status 1")
-			}
-			return r.out, nil
-		}
-	}
-	return "", nil
-}
 
 // machine answers the doctor's question "which profile, components and email?"
 // the way `chezmoi execute-template` does on a configured machine.
@@ -52,9 +16,7 @@ const fullComponents = "docker,devtools,node,python,go,rust,kubernetes,java"
 
 func doctor(t *testing.T, r *fakeRunner) (string, int) {
 	t.Helper()
-	var out bytes.Buffer
-	code := app.Main(context.Background(), []string{"doctor"}, &out, &out, r)
-	return out.String(), code
+	return run(t, r, nil, "doctor")
 }
 
 func TestDoctorChecksFullProfileTools(t *testing.T) {

@@ -9,6 +9,8 @@ set -Eeuo pipefail
 repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 filter="${1:-}"
 CHEZMOI="${CHEZMOI:-chezmoi}"
+# The dev binary (`make build`); the bootstrap and dry-run tests run it.
+DEV="${DEV:-$repo/cli/dist/dev}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -130,6 +132,37 @@ test_zsh_starts_cleanly_without_plugins_and_has_shared_aliases() {
 test_bash_fallback_has_the_same_aliases_and_functions() {
     render bash minimal
     shell_in_home bash '[[ :$PATH: == *":$HOME/.local/bin:"* ]] && alias gs >/dev/null && alias gco >/dev/null && declare -F y zi >/dev/null && [[ $EDITOR == nvim ]]'
+}
+
+# shell_output <shell> <command>: what an interactive shell in $home prints.
+shell_output() {
+    env -i HOME="$home" PATH="/usr/bin:/bin" TERM=xterm-256color \
+        script -qec "$1 -i -c '$2'" /dev/null </dev/null | tr -d '\r'
+}
+
+test_shells_say_once_a_day_when_the_repo_is_behind_and_never_update() {
+    render notice minimal
+    local state="$home/.local/state/dev" sh out
+    mkdir -p "$home/.local/bin" "$state"
+    printf '#!/bin/sh\necho "$*" >>"$HOME/dev-calls"\n' >"$home/.local/bin/dev"
+    chmod +x "$home/.local/bin/dev"
+    for sh in zsh bash; do
+        # A day-old check that found 3 new commits: tell, and check again in the background.
+        printf '3\n' >"$state/update-check"
+        touch -d '2 days ago' "$state/update-check"
+        rm -f "$home/dev-calls"
+        out="$(shell_output "$sh" true)"
+        grep -q '3 new commit.*dev update' <<<"$out" || { echo "    $sh printed:"; echo "$out"; return 1; }
+        for _ in 1 2 3 4 5 6 7 8 9 10; do [[ -s "$home/dev-calls" ]] && break; sleep 0.2; done
+        [[ "$(cat "$home/dev-calls" 2>/dev/null)" == "update --check" ]] || { echo "    $sh did not run the check"; return 1; }
+        # Up to date and checked recently: silent, and no check.
+        printf '0\n' >"$state/update-check"
+        rm -f "$home/dev-calls"
+        out="$(shell_output "$sh" true)"
+        [[ -z "$out" ]] || { echo "    $sh printed:"; echo "$out"; return 1; }
+        sleep 0.5
+        [[ ! -e "$home/dev-calls" ]] || { echo "    $sh checked although it checked recently"; return 1; }
+    done
 }
 
 test_shell_files_are_syntactically_valid() {
@@ -275,6 +308,39 @@ init_only() {
     cat "$root/chezmoi.toml"
 }
 
+test_component_overrides_can_be_emptied_again() {
+    # dev remove passes a single space for "no overrides left"; an unset variable keeps the old ones.
+    local root="$work/empty-overrides" cfg
+    mkdir -p "$root/fakehome"
+    run_init() {
+        env -u DEVENV_ADD -u DEVENV_REMOVE HOME="$root/fakehome" DEVENV_PROFILE=dev DEVENV_NAME=' ' DEVENV_EMAIL=' ' "$@" \
+            "$CHEZMOI" init --source "$repo" --no-tty --promptDefaults \
+            --config "$root/chezmoi.toml" --cache "$root/cache" --persistent-state "$root/state.boltdb" >/dev/null
+    }
+    run_init DEVENV_ADD=cloud DEVENV_REMOVE=go
+    run_init
+    cfg="$(cat "$root/chezmoi.toml")"
+    grep -qx 'add = \["cloud"\]' <<<"$cfg" || { echo "$cfg"; return 1; }
+    run_init DEVENV_ADD=' ' DEVENV_REMOVE=' '
+    cfg="$(cat "$root/chezmoi.toml")"
+    grep -qx 'add = \[\]' <<<"$cfg" || { echo "$cfg"; return 1; }
+    grep -qx 'remove = \[\]' <<<"$cfg" || { echo "$cfg"; return 1; }
+}
+
+test_dev_profile_reads_the_selection_from_a_real_chezmoi_config() {
+    local root="$work/dev-profile" out
+    mkdir -p "$root/home"
+    env -u DEVENV_ADD -u DEVENV_REMOVE HOME="$root/home" XDG_CONFIG_HOME="" DEVENV_PROFILE=dev DEVENV_NAME=' ' DEVENV_EMAIL=' ' \
+        DEVENV_ADD=cloud DEVENV_REMOVE=go "$CHEZMOI" init --source "$repo" --no-tty --promptDefaults >/dev/null
+    out="$(env HOME="$root/home" XDG_CONFIG_HOME="" PATH="$PATH" "$DEV" profile 2>&1)" || { echo "$out"; return 1; }
+    local want
+    for want in 'profile: *dev' '+ cloud' '- go'; do
+        grep -q -- "$want" <<<"$out" || { echo "$out"; return 1; }
+    done
+    # Effective: the dev profile without go, plus cloud and the python it needs.
+    grep -q 'components: docker,devtools,node,python,rust,cloud' <<<"$out" || { echo "$out"; return 1; }
+}
+
 test_profile_defaults_to_dev_but_full_when_migrating_from_v1() {
     grep -qx 'profile = "dev"' <<<"$(init_only default-profile)"
     grep -qx 'profile = "full"' <<<"$(init_only v1-profile DEVENV_DEFAULT_PROFILE=full)"
@@ -301,6 +367,16 @@ test_identity_defaults_also_come_from_an_existing_gitconfig_local() {
     cfg="$(init_only local-id)"
     grep -qx 'name = "Jane Doe"' <<<"$cfg" || { echo "$cfg"; return 1; }
     grep -qx 'email = "123+jane@users.noreply.github.com"' <<<"$cfg"
+}
+
+test_identity_left_blank_on_purpose_beats_the_git_config_default() {
+    # dev setup passes a single space when a person clears the field.
+    mkdir -p "$work/blank-id"
+    printf '[user]\n\tname = Jane Doe\n\temail = 123+jane@users.noreply.github.com\n' >"$work/blank-id/gitconfig"
+    local cfg
+    cfg="$(init_only blank-id DEVENV_NAME=' ' DEVENV_EMAIL=' ')"
+    grep -qx 'name = ""' <<<"$cfg" || { echo "$cfg"; return 1; }
+    grep -qx 'email = ""' <<<"$cfg"
 }
 
 # lib_sh '<bash code>': run code after the rendered install-script library, with
@@ -347,11 +423,46 @@ test_dry_run_changes_nothing_in_home() {
     local fake="$work/dry/home"
     mkdir -p "$fake"
     printf 'original\n' >"$fake/.zshrc"
-    env HOME="$fake" XDG_CONFIG_HOME="$fake/.config" DEVENV_DIR="$work/dry/nonexistent" \
-        "$repo/install.sh" --dry-run --yes --profile minimal --name T --email t@example.com >/dev/null 2>&1
+    env HOME="$fake" XDG_CONFIG_HOME="$fake/.config" XDG_STATE_HOME="" DEVENV_DIR="$work/dry/nonexistent" DEVENV_DEV_BIN="$DEV" \
+        "$repo/install.sh" --dry-run --yes --profile minimal --name T --email t@example.com >"$work/dry/out" 2>&1 ||
+        { tail -20 "$work/dry/out"; return 1; }
+    grep -q "Install steps that would run" "$work/dry/out" || { tail -20 "$work/dry/out"; return 1; }
     [[ "$(cat "$fake/.zshrc")" == original ]]
     [[ "$(find "$fake" -mindepth 1 | wc -l)" -eq 1 ]] || { echo "    created:"; find "$fake" -mindepth 1; return 1; }
     [[ ! -e "$work/dry/nonexistent" ]]
+}
+
+# fake_release <dir>: a release like GoReleaser's, whose "dev" prints its arguments.
+fake_release() {
+    local dir="$1" os arch
+    os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+    case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64 | arm64) arch=arm64 ;; esac
+    mkdir -p "$dir/build"
+    printf '#!/bin/sh\necho "fake dev: $*"\n' >"$dir/build/dev"
+    chmod +x "$dir/build/dev"
+    tar -czf "$dir/dev_${os}_${arch}.tar.gz" -C "$dir/build" dev
+    (cd "$dir" && sha256sum "dev_${os}_${arch}.tar.gz" >checksums.txt)
+}
+
+test_bootstrap_installs_a_verified_release_and_hands_over_to_setup() {
+    local root="$work/boot" out
+    fake_release "$root/release"
+    mkdir -p "$root/home"
+    out="$(env HOME="$root/home" DEVENV_RELEASE_URL="file://$root/release" \
+        sh "$repo/install.sh" --from-nowhere --yes 2>&1)" || { echo "$out"; return 1; }
+    [[ -x "$root/home/.local/bin/dev" ]] || { echo "$out"; return 1; }
+    # From a clone, setup is pointed at it; every other argument is passed through.
+    grep -qx "fake dev: setup --source $repo --from-nowhere --yes" <<<"$out" || { echo "$out"; return 1; }
+}
+
+test_bootstrap_refuses_a_release_whose_checksum_does_not_match() {
+    local root="$work/boot-bad" out
+    fake_release "$root/release"
+    sed -i 's/^[0-9a-f]*/'"$(printf '0%.0s' {1..64})"'/' "$root/release/checksums.txt"
+    mkdir -p "$root/home"
+    ! out="$(env HOME="$root/home" DEVENV_RELEASE_URL="file://$root/release" sh "$repo/install.sh" --yes 2>&1)" || { echo "$out"; return 1; }
+    grep -q "Checksum mismatch" <<<"$out" || { echo "$out"; return 1; }
+    [[ ! -e "$root/home/.local/bin/dev" ]]
 }
 
 # ---------------------------------------------------------------- run
