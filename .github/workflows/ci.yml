@@ -117,21 +117,34 @@ jobs:
       - name: Build dev
         shell: pwsh
         run: cd cli; $env:CGO_ENABLED = '0'; go build -trimpath -o dist/dev.exe .
-      # Windows Server runner images have no winget (Windows 10/11 have it via App Installer).
+      # Windows Server runner images have no working winget (Windows 10/11 have
+      # it via App Installer): install the official release bundle and its x64
+      # dependencies. Windows PowerShell, whose Appx cmdlets are the reliable ones.
       - name: Install winget
-        shell: pwsh
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # PSResourceGet ships with PowerShell 7.4+ (no NuGet provider step needed).
-          Install-PSResource -Name Microsoft.WinGet.Client -Repository PSGallery -TrustRepository -Quiet
-          Import-Module Microsoft.WinGet.Client
-          Repair-WinGetPackageManager -AllUsers -Latest
-          # winget is an app alias in WindowsApps, which a Server PATH may lack.
+          $ErrorActionPreference = 'Stop'
+          $apps = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
+          $env:Path = "$apps;$env:Path"
           if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-            $apps = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
-            $env:Path = "$apps;$env:Path"
-            Add-Content -Path $env:GITHUB_PATH -Value $apps
+            $tmp = Join-Path $env:RUNNER_TEMP 'winget'
+            New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+            gh release download --repo microsoft/winget-cli --dir $tmp `
+              --pattern 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle' `
+              --pattern 'DesktopAppInstaller_Dependencies.zip' --pattern '*_License1.xml'
+            if ($LASTEXITCODE -ne 0) { throw 'downloading the winget release failed' }
+            Expand-Archive -Path "$tmp\DesktopAppInstaller_Dependencies.zip" -DestinationPath "$tmp\deps"
+            $deps = @(Get-ChildItem "$tmp\deps" -Recurse -Filter *.appx | Where-Object { $_.FullName -match '\\x64\\' } | ForEach-Object FullName)
+            $bundle = "$tmp\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle"
+            $license = (Get-ChildItem "$tmp\*_License1.xml").FullName
+            Add-AppxProvisionedPackage -Online -PackagePath $bundle -DependencyPackagePath $deps -LicensePath $license | Out-Null
+            Add-AppxPackage -Path $bundle -DependencyPath $deps -ForceUpdateFromAnyVersion
           }
+          Add-Content -Path $env:GITHUB_PATH -Value $apps
           winget --version
+          if ($LASTEXITCODE -ne 0) { throw 'winget does not run' }
       - name: Install
         shell: pwsh
         env:
