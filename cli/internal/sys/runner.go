@@ -15,8 +15,8 @@ type Cmd struct {
 	// Env is added to dev's own environment ("KEY=value").
 	Env []string
 	// Attach connects the command to the terminal (it may prompt; its output is
-	// shown live and not captured). Otherwise it runs with no stdin and its
-	// combined output is returned.
+	// shown live and not captured). Otherwise it runs with no stdin and no
+	// controlling terminal, and its combined output is returned.
 	Attach bool
 }
 
@@ -44,6 +44,7 @@ func (Exec) Run(ctx context.Context, c Cmd) (string, error) {
 	if home, err := os.UserHomeDir(); err == nil {
 		cmd.Dir = home
 	}
+	detach(cmd)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
