@@ -34,6 +34,17 @@ if [[ -d "$HOME/dotfiles" ]]; then
     check "v1: old nvim tree left untouched" bash -c '[ "$(ls ~/dotfiles/nvim/.config/nvim)" = init.lua ]'
 fi
 
+# ---- a default the run relied on (e.g. Alpine's profile, set with no --profile)
+if [[ -n "${EXPECT_PROFILE:-}" ]]; then
+    check "profile defaulted to $EXPECT_PROFILE" bash -c '[ "$(chezmoi execute-template "{{ .profile }}")" = "$1" ]' _ "$EXPECT_PROFILE"
+fi
+
+# ---- no-sudo machine: root steps were skipped and recorded, sudo never used
+if [[ "${EXPECT_NO_SUDO:-}" = 1 ]]; then
+    check "no-sudo: remembered in the machine config" bash -c '[ "$(chezmoi execute-template "{{ .nosudo }}")" = true ]'
+    check "no-sudo: login shell change skipped"        grep -q 'login shell' "$HOME/.local/state/dev/skipped.log"
+fi
+
 # ---- idempotency: a second run changes nothing and re-runs no install step
 second="$("$dev" setup --yes --source "$repo" 2>&1)"
 check "second install succeeds"   test $? -eq 0

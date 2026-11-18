@@ -1,33 +1,37 @@
 {{- if eq .chezmoi.os "linux" -}}
 #!/usr/bin/env bash
-# Re-runs when the package list changes: {{ .packages.apt | toJson | sha256sum }}
+# Re-runs when a Linux package list changes: {{ list .packages.apt .packages.dnf .packages.pacman .packages.apk | toJson | sha256sum }}
 set -Eeuo pipefail
 {{ template "lib.sh" . }}
 
 step "System packages"
 # shellcheck source=/dev/null
 . /etc/os-release
-if ! is_debian_like; then
-    record_skip "system packages: ${PRETTY_NAME:-this distro} is not supported yet (planned: milestone 4)"
-    exit 0
-fi
+pm="$(package_manager)"
+case "$pm" in
+    apt) wanted=({{ range .packages.apt }} {{ . | quote }}{{ end }} ) ;;
+    dnf) wanted=({{ range .packages.dnf }} {{ . | quote }}{{ end }} ) ;;
+    pacman) wanted=({{ range .packages.pacman }} {{ . | quote }}{{ end }} ) ;;
+    apk) wanted=({{ range .packages.apk }} {{ . | quote }}{{ end }} ) ;;
+    *)
+        record_skip "system packages: no apt, dnf, pacman or apk on ${PRETTY_NAME:-this distro}"
+        exit 0 ;;
+esac
 
-wanted=({{ range .packages.apt }} {{ . | quote }}{{ end }} )
 missing=()
 for pkg in "${wanted[@]}"; do
-    dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed' || missing+=("$pkg")
+    pkg_installed "$pm" "$pkg" || missing+=("$pkg")
 done
 
 if [ "${#missing[@]}" -eq 0 ]; then
-    info "All ${#wanted[@]} base packages already installed."
+    info "All ${#wanted[@]} base packages already installed ($pm)."
     exit 0
 fi
 
-info "Missing: ${missing[*]}"
+info "Missing ($pm): ${missing[*]}"
 if ! can_sudo; then
     record_skip "system packages (no sudo): ${missing[*]}"
     exit 0
 fi
-as_root apt-get update -qq
-as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}"
+pkg_install "$pm" "${missing[@]}"
 {{- end }}

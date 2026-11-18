@@ -474,6 +474,146 @@ test_commands_stay_visible_when_their_output_is_discarded() {
     grep -qF '$ echo hidden-output' "$work/lib.err" || { echo "    stderr:"; cat "$work/lib.err"; return 1; }
 }
 
+# init_config <dir> [VAR=value...]: a machine config in <dir> (minimal, test identity;
+# DEVENV_PROFILE= in the caller's env leaves the profile to its default).
+init_config() {
+    local root="$1"; shift
+    mkdir -p "$root"
+    env DEVENV_PROFILE="${DEVENV_PROFILE-minimal}" DEVENV_NAME=T DEVENV_EMAIL=t@example.com "$@" \
+        "$CHEZMOI" init --source "$repo" --no-tty --promptDefaults \
+        --config "$root/chezmoi.toml" --cache "$root/cache" --persistent-state "$root/state.boltdb" >/dev/null
+}
+
+# render_script <dir> <script name prefix>: one install script rendered with <dir>'s config.
+render_script() {
+    local root="$1" f
+    f="$(ls "$repo"/home/.chezmoiscripts/*"$2".sh.tmpl)"
+    "$CHEZMOI" execute-template --source "$repo" --config "$root/chezmoi.toml" \
+        --cache "$root/cache" --persistent-state "$root/state.boltdb" <"$f" >"$root/$2.sh"
+    echo "$root/$2.sh"
+}
+
+# fake_distro <pm>: prints a PATH where the only package manager is a fake <pm>
+# (dnf, pacman or apk) that has nothing installed, and sudo is passwordless.
+# Package-manager and sudo calls are logged to $work/distro-<pm>/log.
+# system_without <name>...: prints a dir of links to this system's commands,
+# minus the package managers, sudo and the named ones.
+system_without() {
+    local sys="$work/sysbin${*:+-}${*// /-}" f
+    if [[ ! -d "$sys" ]]; then
+        mkdir -p "$sys"
+        for f in /usr/bin/* /bin/*; do
+            case " apt-get dpkg-query dnf rpm pacman apk sudo $* " in *" ${f##*/} "*) continue ;; esac
+            [[ -e "$sys/${f##*/}" || -L "$sys/${f##*/}" ]] || ln -s "$f" "$sys/${f##*/}"
+        done
+    fi
+    echo "$sys"
+}
+
+fake_distro() {
+    local pm="$1" d="$work/distro-$1" sys
+    sys="$(system_without)"
+    rm -rf "$d"; mkdir -p "$d/bin"; : >"$d/log"
+    fake() { printf '#!/bin/sh\n%s\n' "$2" >"$d/bin/$1"; chmod +x "$d/bin/$1"; }
+    fake sudo 'case "$1" in -n) shift ;; -v) exit 0 ;; esac; echo "sudo $*" >>'"$d/log"'; exec "$@"'
+    case "$pm" in
+        dnf) fake dnf 'echo "dnf $*" >>'"$d/log"; fake rpm 'exit 1' ;;
+        pacman) fake pacman '[ "$1" = -Q ] && exit 1; echo "pacman $*" >>'"$d/log" ;;
+        apk) fake apk '[ "$1" = info ] && exit 1; echo "apk $*" >>'"$d/log" ;;
+    esac
+    echo "$d/bin:$sys"
+}
+
+test_system_packages_use_the_distros_package_manager() {
+    local root="$work/pm" script path pm
+    init_config "$root"
+    script="$(render_script "$root" 10-system-packages)"
+    for pm in dnf pacman apk; do
+        path="$(fake_distro "$pm")"
+        env -i HOME="$root/home" PATH="$path" XDG_STATE_HOME="$root/state" bash "$script" >/dev/null 2>&1 ||
+            { echo "    $pm: script failed"; return 1; }
+        local log="$work/distro-$pm/log"
+        case "$pm" in
+            dnf) grep -q '^sudo dnf install -y -q .*util-linux-user.*zsh' "$log" ;;
+            pacman) grep -q '^sudo pacman -Syu --needed --noconfirm base-devel.*zsh' "$log" ;;
+            apk) grep -q '^sudo apk add -q bash .*neovim.*zsh' "$log" ;;
+        esac || { echo "    $pm:"; cat "$log"; return 1; }
+    done
+}
+
+test_no_sudo_is_remembered_and_root_steps_are_skipped_not_run() {
+    local root="$work/nosudo" script path
+    init_config "$root" DEVENV_NO_SUDO=1
+    grep -qx 'nosudo = true' "$root/chezmoi.toml" || { cat "$root/chezmoi.toml"; return 1; }
+    init_config "$root"   # re-init without the variable keeps it
+    grep -qx 'nosudo = true' "$root/chezmoi.toml" || { echo "    not remembered"; return 1; }
+    script="$(render_script "$root" 10-system-packages)"
+    path="$(fake_distro dnf)"   # passwordless sudo is there; no-sudo must not use it
+    env -i HOME="$root/home" PATH="$path" XDG_STATE_HOME="$root/state" bash "$script" >/dev/null 2>&1
+    ! grep -q sudo "$work/distro-dnf/log" || { echo "    used sudo:"; cat "$work/distro-dnf/log"; return 1; }
+    grep -q 'no sudo' "$root/state/dev/skipped.log"
+    init_config "$root" DEVENV_NO_SUDO=0
+    grep -qx 'nosudo = false' "$root/chezmoi.toml" || { echo "    DEVENV_NO_SUDO=0 did not turn it off"; return 1; }
+    # A new no-sudo machine defaults to minimal (docs/v2-design.md: minimal only); others to dev.
+    DEVENV_PROFILE='' init_config "$work/nosudo-new" DEVENV_NO_SUDO=1
+    grep -qx 'profile = "minimal"' "$work/nosudo-new/chezmoi.toml" || { grep profile "$work/nosudo-new/chezmoi.toml"; return 1; }
+    DEVENV_PROFILE='' init_config "$work/sudo-new"
+    grep -qx 'profile = "dev"' "$work/sudo-new/chezmoi.toml" || { grep profile "$work/sudo-new/chezmoi.toml"; return 1; }
+}
+
+# (The Alpine default profile, "minimal", is checked by the Alpine container run:
+# chezmoi init ignores --override-data, so it can't be faked here.)
+test_alpine_gets_neovim_and_jless_from_apk_not_mise() {
+    local alpine='{"chezmoi":{"osRelease":{"id":"alpine"}}}'
+    render alpine minimal
+    "$CHEZMOI" apply --source "$repo" --no-tty --force --config "$work/alpine/chezmoi.toml" --cache "$work/alpine/cache" \
+        --persistent-state "$work/alpine/state.boltdb" --destination "$home" --exclude scripts,externals --override-data "$alpine"
+    lacks .config/mise/config.toml 'neovim ='
+    lacks .config/mise/config.toml 'jless ='
+    has .config/mise/config.toml 'ripgrep = "latest"'
+    # Elsewhere mise keeps them.
+    render not-alpine minimal
+    has .config/mise/config.toml 'neovim = "0.11"'
+    has .config/mise/config.toml 'jless = "latest"'
+}
+
+test_login_shell_step_reports_once_when_it_cannot_change_the_shell() {
+    # No sudo and no terminal (a no-sudo server in CI): skipped once, then quiet,
+    # so a second install stays a no-op.
+    local root="$work/loginshell" script bin first second
+    init_config "$root"
+    script="$(render_script "$root" 40-login-shell)"
+    local sys nozsh
+    sys="$(system_without)"; nozsh="$(system_without zsh)"
+    bin="$root/bin"; mkdir -p "$bin"
+    printf '#!/bin/sh\necho "me:x:1000:1000::/home/me:/bin/bash"\n' >"$bin/getent"; chmod +x "$bin/getent"
+    local yes
+    for yes in 0 1; do   # asked nobody, or --yes
+        rm -rf "$root/state"
+        first="$(env -i HOME="$root/home" PATH="$bin:$sys" XDG_STATE_HOME="$root/state" DEVENV_YES=$yes setsid -w bash "$script" </dev/null 2>&1)"
+        grep -q 'Login shell' <<<"$first" || { echo "    yes=$yes first run:"; echo "$first"; return 1; }
+        second="$(env -i HOME="$root/home" PATH="$bin:$sys" XDG_STATE_HOME="$root/state" DEVENV_YES=$yes setsid -w bash "$script" </dev/null 2>&1)"
+        [[ -z "$second" ]] || { echo "    yes=$yes second run was not quiet:"; echo "$second"; return 1; }
+        [[ "$(grep -c 'login shell' "$root/state/dev/skipped.log")" = 1 ]]
+    done
+    # No zsh (base packages skipped without sudo): also said once, and retried
+    # as soon as zsh shows up.
+    rm -rf "$root/state"
+    for _ in 1 2; do
+        env -i HOME="$root/home" PATH="$bin:$nozsh" XDG_STATE_HOME="$root/state" DEVENV_YES=1 setsid -w bash "$script" </dev/null >/dev/null 2>&1
+    done
+    [[ "$(grep -c 'zsh is not installed' "$root/state/dev/skipped.log")" = 1 ]] || { cat "$root/state/dev/skipped.log"; return 1; }
+    # zsh installed and sudo available: retried (fake sudo and chsh; never the real chsh).
+    local can="$root/can"; mkdir -p "$can" "$root/home"
+    printf '#!/bin/sh\ncase "$1" in -n) shift ;; -v) exit 0 ;; esac; exec "$@"\n' >"$can/sudo"
+    printf '#!/bin/sh\necho "chsh $*" >>"$HOME/chsh.log"\n' >"$can/chsh"
+    printf '#!/bin/sh\ncat >>"$HOME/etc-shells"\n' >"$can/tee"   # never the real /etc/shells
+    chmod +x "$can/sudo" "$can/chsh" "$can/tee"
+    first="$(env -i HOME="$root/home" PATH="$can:$bin:$sys" XDG_STATE_HOME="$root/state" DEVENV_YES=1 setsid -w bash "$script" </dev/null 2>&1)" ||
+        { echo "    retry failed:"; echo "$first"; return 1; }
+    grep -q 'chsh -s .*zsh' "$root/home/chsh.log" || { echo "    not retried once zsh and sudo were there"; return 1; }
+}
+
 test_a_failing_step_is_logged_with_its_name() {
     rm -f "$work/lib/state/dev/failed.log"
     lib_sh 'step "Frobnicate widgets"; false' && { echo "    expected the step to fail"; return 1; }

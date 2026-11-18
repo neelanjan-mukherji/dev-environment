@@ -148,15 +148,16 @@ func (r *run) upgradeSystem(ctx context.Context) error {
 		}
 		return r.attached(ctx, nil, "brew", "upgrade")
 	}
-	if _, err := r.sh(ctx, "command -v apt-get"); err != nil {
-		return errors.New("only apt and Homebrew are supported so far")
+	pm, found := r.packageManager(ctx)
+	if !found {
+		return errors.New("no apt, dnf, pacman or apk found")
 	}
-	ok, err := r.confirm(Question{Text: "Upgrade OS packages with apt (needs sudo)?"}, nil)
+	ok, err := r.confirm(Question{Text: "Upgrade OS packages with " + pm.name + " (needs sudo)?"}, nil)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return errStop
 	}
-	return r.apt(ctx, "upgrade", "-y")
+	return r.asRoot(ctx, pm, pm.upgrade)
 }

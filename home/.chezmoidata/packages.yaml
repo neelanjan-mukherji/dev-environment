@@ -1,6 +1,8 @@
 # Base system packages, installed with the OS package manager (needs sudo).
 # Everything else comes from mise (home/private_dot_config/mise/config.toml.tmpl).
-# apt (Debian/Ubuntu) and Homebrew (macOS); dnf/pacman/apk/winget lists arrive with their milestones.
+# Linux: the list for the package manager found at install time (apt, dnf, pacman,
+# apk). macOS: Homebrew. The winget list arrives with Windows (milestone 5).
+# Each list should mean the same set: shell, git, curl, compilers, archivers.
 packages:
   apt:
     - bash-completion
@@ -15,6 +17,64 @@ packages:
     - tree
     - unzip
     - xz-utils
+    - zip
+    - zsh
+  # Fedora (and other dnf distros)
+  dnf:
+    - bash-completion
+    - ca-certificates
+    - curl
+    - file
+    - findutils
+    - gcc
+    - gcc-c++
+    - git
+    - glibc-langpack-en
+    - gnupg2
+    - less
+    - libatomic         # Node's official builds link it; not in a minimal Fedora
+    - make
+    - procps-ng
+    - tar
+    - tree
+    - unzip
+    - util-linux-user   # chsh, for the login shell step
+    - xz
+    - zip
+    - zsh
+  # Arch (and other pacman distros)
+  pacman:
+    - base-devel
+    - bash-completion
+    - ca-certificates
+    - curl
+    - file
+    - git
+    - gnupg
+    - less
+    - tree
+    - unzip
+    - xz
+    - zip
+    - zsh
+  # Alpine: the minimal profile only (see docs/v2-design.md).
+  apk:
+    - bash              # the install scripts and the fallback shell
+    - bash-completion
+    - build-base
+    - ca-certificates
+    - curl
+    - file
+    - git
+    - gnupg
+    - jless             # mise's jless and neovim are glibc builds
+    - less
+    - ncurses           # terminfo for tmux and nvim
+    - neovim            # 0.11 on Alpine 3.22
+    - shadow            # chsh, for the login shell step
+    - tree
+    - unzip
+    - xz
     - zip
     - zsh
   # macOS: Homebrew formulae. The Command Line Tools (compilers, git) come with Homebrew.

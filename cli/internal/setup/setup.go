@@ -209,18 +209,6 @@ func (r *run) yesEnv() []string {
 	return nil
 }
 
-// apt runs apt-get as root: update, then the given subcommand non-interactively.
-func (r *run) apt(ctx context.Context, args ...string) error {
-	root := []string{"sudo"}
-	if os.Geteuid() == 0 {
-		root = []string{"env"}
-	}
-	if err := r.attached(ctx, nil, root[0], append(root[1:], "apt-get", "update", "-qq")...); err != nil {
-		return err
-	}
-	return r.attached(ctx, nil, root[0], append(root[1:], append([]string{"env", "DEBIAN_FRONTEND=noninteractive", "apt-get"}, args...)...)...)
-}
-
 // confirm asks q; when explain is given the person can ask to see more first.
 // Under --yes the answer is yes.
 func (r *run) confirm(q Question, explain func()) (bool, error) {
@@ -274,20 +262,29 @@ func (r *run) prerequisites(ctx context.Context) error {
 		}
 		return errors.New("finish installing the Command Line Tools in the window that opened, then run this again")
 	}
-	if _, err := r.sh(ctx, "command -v git && command -v curl"); err == nil {
+	// bash too: the install scripts need it, and Alpine ships without it.
+	if _, err := r.sh(ctx, "command -v git && command -v curl && command -v bash"); err == nil {
 		return nil
 	}
 	if r.opts.DryRun {
-		return errors.New("a dry run needs git and curl; install them first")
+		return errors.New("a dry run needs git, curl and bash; install them first")
 	}
-	if _, err := r.sh(ctx, "command -v apt-get"); err != nil {
-		return errors.New("install git and curl, then re-run")
+	pm, ok := r.packageManager(ctx)
+	if !ok {
+		return errors.New("install git, curl and bash, then re-run")
 	}
-	r.ui.step("Installing prerequisites (git, curl)")
-	if ok, err := r.confirm(Question{Text: "Install git, curl and ca-certificates with apt (needs sudo)?"}, nil); err != nil || !ok {
-		return errors.New("git and curl are required")
+	pkgs := []string{"git", "curl", "ca-certificates", "bash"}
+	r.ui.step("Installing prerequisites (" + strings.Join(pkgs, ", ") + ")")
+	if pm.note != "" {
+		r.ui.info(pm.note)
 	}
-	return r.apt(ctx, "install", "-y", "-qq", "git", "curl", "ca-certificates")
+	if _, err := r.rootPrefix(ctx); err != nil {
+		return errors.New("git, curl and bash are needed and there is no sudo here: ask an admin to install them, then re-run")
+	}
+	if ok, err := r.confirm(Question{Text: "Install them with " + pm.name + " (needs sudo)?"}, nil); err != nil || !ok {
+		return errors.New("git, curl and bash are required")
+	}
+	return r.asRoot(ctx, pm, pm.install, pkgs...)
 }
 
 func (r *run) source(ctx context.Context) error {

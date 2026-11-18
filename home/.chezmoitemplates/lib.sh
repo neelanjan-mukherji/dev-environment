@@ -15,6 +15,8 @@ mkdir -p "$DEVENV_STATE"
 # shellcheck source=/dev/null
 . {{ joinPath .chezmoi.sourceDir "private_dot_config/shell/path.sh" | quote }}
 
+# No-sudo machines (dev setup --no-sudo) never run sudo; the env var overrides for one run.
+DEVENV_NO_SUDO="${DEVENV_NO_SUDO:-{{ if dig "nosudo" false . }}1{{ else }}0{{ end }}}"
 DEVENV_STEP="${DEVENV_STEP:-install script}"
 step()  { DEVENV_STEP="$*"; printf '\n\033[1;35m==>\033[0m \033[1m%s\033[0m\n' "$*"; }
 info()  { printf '    %s\n' "$*"; }
@@ -51,10 +53,11 @@ as_root() {
     if [ "$(id -u)" = 0 ]; then run "$@"; else run sudo "$@"; fi
 }
 
-# True when root commands can run: already root, passwordless sudo, or a person
-# at the terminal who can type the sudo password.
+# True when root commands can run: already root, or (unless this is a no-sudo
+# machine) passwordless sudo or a person at the terminal who can type the password.
 can_sudo() {
     [ "$(id -u)" = 0 ] && return 0
+    [ "$DEVENV_NO_SUDO" = 1 ] && return 1
     command -v sudo >/dev/null 2>&1 || return 1
     sudo -n true 2>/dev/null && return 0
     # The redirect is for the person at the terminal, not for root.
@@ -102,10 +105,36 @@ brew_install() {
     run brew install "$kind" "${missing[@]}"
 }
 
-# True on Debian, Ubuntu and their derivatives (apt-based).
-is_debian_like() {
-    # shellcheck source=/dev/null
-    (. /etc/os-release && case " ${ID:-} ${ID_LIKE:-} " in *" debian "* | *" ubuntu "*) exit 0 ;; *) exit 1 ;; esac)
+# package_manager: apt, dnf, pacman or apk, whichever this Linux has; empty if none.
+package_manager() {
+    local pm
+    for pm in apt-get dnf pacman apk; do
+        if command -v "$pm" >/dev/null 2>&1; then echo "${pm%-get}"; return 0; fi
+    done
+}
+
+# pkg_installed <pm> <package>: true if the package is installed.
+pkg_installed() {
+    case "$1" in
+        apt) dpkg-query -W -f='${Status}' "$2" 2>/dev/null | grep -q 'install ok installed' ;;
+        dnf) rpm -q "$2" >/dev/null 2>&1 ;;
+        pacman) pacman -Q "$2" >/dev/null 2>&1 ;;
+        apk) apk info -e "$2" >/dev/null 2>&1 ;;
+        *) return 1 ;;
+    esac
+}
+
+# pkg_install <pm> <package>...: installs them as root, non-interactively.
+pkg_install() {
+    local pm="$1"; shift
+    case "$pm" in
+        apt) as_root apt-get update -qq
+             as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@" ;;
+        dnf) as_root dnf install -y -q "$@" ;;
+        # Arch has no partial upgrades: installing means syncing the whole system.
+        pacman) as_root pacman -Syu --needed --noconfirm "$@" ;;
+        apk) as_root apk add -q "$@" ;;
+    esac
 }
 
 # wsl.conf on stdin -> the same file with [boot] systemd=true on stdout. An existing

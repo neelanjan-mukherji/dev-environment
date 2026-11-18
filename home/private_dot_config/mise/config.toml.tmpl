@@ -1,4 +1,6 @@
 {{- $on := includeTemplate "components" . | splitList "," -}}
+{{- /* Alpine (musl): Neovim and jless only publish glibc builds, so apk installs them (packages.yaml). */ -}}
+{{- $alpine := eq (dig "osRelease" "id" "" .chezmoi) "alpine" -}}
 # Managed by chezmoi from ~/dev-environment (profile: {{ .profile }}). Edit the source, not this file.
 # Policy: small CLI tools track "latest"; toolchains are pinned and bumped deliberately.
 
@@ -15,11 +17,15 @@ eza = "latest"
 fd = "latest"
 fzf = "latest"
 gh = "latest"
+{{- if not $alpine }}
 jless = "latest"
+{{- end }}
 jq = "latest"
 lazygit = "latest"
+{{- if not $alpine }}
 # Pinned: config targets the Neovim 0.11 LSP API and nvim-treesitter master.
 neovim = "0.11"
+{{- end }}
 ripgrep = "latest"
 starship = "latest"
 {{- if ne .chezmoi.os "darwin" }}

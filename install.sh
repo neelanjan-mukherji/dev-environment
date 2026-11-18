@@ -3,6 +3,7 @@
 # `dev setup`, which does the actual work (see `dev setup --help`).
 #
 #   curl -fsSL https://raw.githubusercontent.com/neelanjan-mukherji/dev-environment/main/install.sh | sh
+#   wget -qO- https://raw.githubusercontent.com/neelanjan-mukherji/dev-environment/main/install.sh | sh   # Alpine
 #   ./install.sh                                   # from a clone: guided
 #   ./install.sh --yes --profile minimal           # unattended
 #   ./install.sh --from-source                     # build dev from this clone (Go, or mise)
@@ -64,14 +65,24 @@ sha256() {
     else shasum -a 256 "$1" | cut -d' ' -f1; fi
 }
 
+# fetch <url> [file]: to the file, else stdout. curl, or wget where curl is
+# missing (a fresh Alpine has only busybox wget).
+fetch() {
+    if command -v curl >/dev/null 2>&1; then curl -fsSL "$1" -o "${2:--}"
+    elif command -v wget >/dev/null 2>&1; then wget -qO "${2:--}" "$1"
+    else die "Needs curl or wget."; fi
+}
+
 # download <version|latest>: fetch, verify and install the release binary.
 download() {
+    # Up front: a die inside $(fetch ...) would only end that subshell.
+    command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || die "Needs curl or wget."
     base="${DEVENV_RELEASE_URL:-}"
     if [ -z "$base" ]; then
         tag="${DEVENV_DEV_VERSION:-}"
         if [ -z "$tag" ]; then
             # The newest release, prereleases included (v2 is in alpha).
-            tag="$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=1" |
+            tag="$(fetch "https://api.github.com/repos/$REPO/releases?per_page=1" |
                 sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)" ||
                 die "Could not look up the latest release."
             [ -n "$tag" ] || die "No release published yet; clone the repo and run ./install.sh --from-source."
@@ -82,8 +93,8 @@ download() {
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
     say "Downloading dev ($asset)"
-    curl -fsSL "$base/$asset" -o "$tmp/$asset" || die "Download failed: $base/$asset"
-    curl -fsSL "$base/checksums.txt" -o "$tmp/checksums.txt" || die "Download failed: $base/checksums.txt"
+    fetch "$base/$asset" "$tmp/$asset" || die "Download failed: $base/$asset"
+    fetch "$base/checksums.txt" "$tmp/checksums.txt" || die "Download failed: $base/checksums.txt"
     want="$(awk -v f="$asset" '$2 == f || $2 == "*" f { print $1 }' "$tmp/checksums.txt")"
     [ -n "$want" ] || die "checksums.txt has no entry for $asset."
     [ "$(sha256 "$tmp/$asset")" = "$want" ] || die "Checksum mismatch for $asset; not installing it."

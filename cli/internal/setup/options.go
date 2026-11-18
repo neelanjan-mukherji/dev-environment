@@ -21,6 +21,9 @@ type Options struct {
 	Remove  []string `yaml:"remove"`
 	Theme   string   `yaml:"theme"`
 	Yes     bool     `yaml:"yes"`
+	// NoSudo: never use sudo on this machine (remembered; false turns it off).
+	// Root-only steps are skipped and listed in skipped.log.
+	NoSudo *bool `yaml:"no_sudo"`
 
 	// Identity steps. A person is asked about each one; with --yes they run only
 	// when chosen here.
@@ -124,5 +127,12 @@ func (o Options) env() []string {
 	list("DEVENV_ADD", o.Add)
 	list("DEVENV_REMOVE", o.Remove)
 	add("DEVENV_THEME", o.Theme)
+	if o.NoSudo != nil {
+		v := "0"
+		if *o.NoSudo {
+			v = "1"
+		}
+		env = append(env, "DEVENV_NO_SUDO="+v)
+	}
 	return env
 }

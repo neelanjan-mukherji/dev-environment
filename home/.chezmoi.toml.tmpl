@@ -5,7 +5,7 @@
   Non-interactive: set DEVENV_PROFILE / DEVENV_NAME / DEVENV_EMAIL (a single space
   means "blank on purpose": no prompt, no default) and pass
   --promptDefaults so anything unset falls back to its default instead of prompting.
-  Defaults: profile "dev" (DEVENV_DEFAULT_PROFILE overrides; install.sh uses "full"
+  Defaults: profile "dev", "minimal" on Alpine and no-sudo machines (DEVENV_DEFAULT_PROFILE overrides; install.sh uses "full"
   when migrating from v1); name and email from the existing git config (global,
   else ~/.gitconfig.local), but the
   email only if it is a GitHub noreply address, else from `gh` when logged in.
@@ -14,9 +14,16 @@
   or edit [data.components] in the generated config and re-run `chezmoi init`.
 */ -}}
 {{- $profiles := list "minimal" "dev" "full" -}}
+{{- /* No-sudo machines: remembered; DEVENV_NO_SUDO=1 turns it on, 0 off. */ -}}
+{{- $nosudo := dig "nosudo" false . -}}
+{{- with env "DEVENV_NO_SUDO" }}{{ $nosudo = eq . "1" }}{{ end -}}
+
+{{- /* Alpine and no-sudo machines are minimal-only targets (docs/v2-design.md); elsewhere "dev". */ -}}
+{{- $fallback := "dev" -}}
+{{- if or $nosudo (eq (dig "osRelease" "id" "" .chezmoi) "alpine") }}{{ $fallback = "minimal" }}{{ end -}}
 {{- $profile := env "DEVENV_PROFILE" -}}
 {{- if not $profile -}}
-{{-   $profile = promptChoiceOnce . "profile" "Profile — minimal: shell+editor+CLI tools | dev: +Docker & languages | full: +Kubernetes & Java" $profiles (env "DEVENV_DEFAULT_PROFILE" | default "dev") -}}
+{{-   $profile = promptChoiceOnce . "profile" "Profile — minimal: shell+editor+CLI tools | dev: +Docker & languages | full: +Kubernetes & Java" $profiles (env "DEVENV_DEFAULT_PROFILE" | default $fallback) -}}
 {{- end -}}
 {{- if not (has $profile $profiles) }}{{ fail (printf "unknown profile %q (known: %s)" $profile (join ", " $profiles)) }}{{ end -}}
 {{- $name := env "DEVENV_NAME" -}}
@@ -56,6 +63,8 @@ sourceDir = {{ .chezmoi.workingTree | quote }}
 profile = {{ $profile | quote }}
 name = {{ $name | trim | quote }}
 email = {{ $email | trim | quote }}
+# Never use sudo here (root-only steps are skipped and listed in ~/.local/state/dev/skipped.log).
+nosudo = {{ $nosudo }}
 
 [data.components]
 # Applied on top of the profile. Known: {{ join ", " $known }}

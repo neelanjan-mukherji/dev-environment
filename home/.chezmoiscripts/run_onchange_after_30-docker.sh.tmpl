@@ -8,31 +8,31 @@ step "Docker Engine"
 # shellcheck source=/dev/null
 . /etc/os-release
 
-if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-    info "Already installed: $(docker --version)"
-else
-    if ! is_debian_like; then
-        record_skip "docker: ${PRETTY_NAME:-this distro} is not supported yet (planned: milestone 4)"
+# Docker's packages: the engine plus the compose and buildx plugins.
+docker_ce=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
+
+# remove_conflicting <pm> <package>...: distro packages that clash with Docker's own.
+remove_conflicting() {
+    local pm="$1" pkg conflicting=(); shift
+    for pkg in "$@"; do pkg_installed "$pm" "$pkg" && conflicting+=("$pkg"); done
+    [ "${#conflicting[@]}" -eq 0 ] && return 0
+    info "These distro packages conflict with Docker Engine: ${conflicting[*]}"
+    if ! confirm "Remove them and install Docker Engine from download.docker.com?"; then
+        record_skip "docker (conflicting packages kept: ${conflicting[*]})"
         exit 0
     fi
+    case "$pm" in
+        apt) as_root apt-get remove -y "${conflicting[@]}" ;;
+        dnf) as_root dnf remove -y "${conflicting[@]}" ;;
+    esac
+}
+
+install_apt() {
     # Docker publishes repos for Ubuntu and Debian; derivatives use their base's.
+    local repo_os codename
     if [ -n "${UBUNTU_CODENAME:-}" ]; then repo_os=ubuntu codename="$UBUNTU_CODENAME"
     else repo_os=debian codename="${VERSION_CODENAME:?}"; fi
-    if ! can_sudo; then record_skip "docker (needs sudo)"; exit 0; fi
-
-    # Distro packages that conflict with Docker's own.
-    conflicting=()
-    for pkg in docker.io docker-doc docker-compose podman-docker containerd runc; do
-        dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed' && conflicting+=("$pkg")
-    done
-    if [ "${#conflicting[@]}" -gt 0 ]; then
-        info "These distro packages conflict with Docker Engine: ${conflicting[*]}"
-        if ! confirm "Remove them and install Docker Engine from download.docker.com?"; then
-            record_skip "docker (conflicting packages kept: ${conflicting[*]})"
-            exit 0
-        fi
-        as_root apt-get remove -y "${conflicting[@]}"
-    fi
+    remove_conflicting apt docker.io docker-doc docker-compose podman-docker containerd runc
     as_root install -m 0755 -d /etc/apt/keyrings
     run curl -fsSL "https://download.docker.com/linux/${repo_os}/gpg" -o "$DEVENV_STATE/docker.gpg"
     as_root gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg "$DEVENV_STATE/docker.gpg"
@@ -40,9 +40,42 @@ else
     as_root chmod a+r /etc/apt/keyrings/docker.gpg
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${repo_os} ${codename} stable" |
         as_root tee /etc/apt/sources.list.d/docker.list >/dev/null
-    as_root apt-get update -qq
-    as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-        docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    pkg_install apt "${docker_ce[@]}"
+}
+
+install_dnf() {
+    # Docker's Fedora repo. (RHEL/CentOS have their own; untested, so not offered.)
+    if [ "${ID:-}" != fedora ]; then
+        record_skip "docker: only Fedora is supported among dnf distros (${PRETTY_NAME:-this one} is not)"
+        exit 0
+    fi
+    remove_conflicting dnf docker docker-client docker-client-latest docker-common docker-latest \
+        docker-latest-logrotate docker-logrotate docker-selinux docker-engine-selinux docker-engine \
+        podman-docker moby-engine
+    # The repo file is downloaded rather than added with `dnf config-manager`,
+    # whose syntax differs between dnf4 and dnf5.
+    run curl -fsSL "https://download.docker.com/linux/fedora/docker-ce.repo" -o "$DEVENV_STATE/docker-ce.repo"
+    as_root install -m 0644 "$DEVENV_STATE/docker-ce.repo" /etc/yum.repos.d/docker-ce.repo
+    rm -f "$DEVENV_STATE/docker-ce.repo"
+    pkg_install dnf "${docker_ce[@]}"
+}
+
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    info "Already installed: $(docker --version)"
+else
+    pm="$(package_manager)"
+    case "$pm" in
+        apt | dnf | pacman) ;;
+        apk) record_skip "docker: Alpine supports the minimal profile only (apk add docker docker-cli-compose yourself)"; exit 0 ;;
+        *) record_skip "docker: no supported package manager on ${PRETTY_NAME:-this distro}"; exit 0 ;;
+    esac
+    if ! can_sudo; then record_skip "docker (needs sudo)"; exit 0; fi
+    case "$pm" in
+        apt) install_apt ;;
+        dnf) install_dnf ;;
+        # Arch packages Docker itself; nothing to add.
+        pacman) pkg_install pacman docker docker-compose docker-buildx ;;
+    esac
 fi
 
 user="$(id -un)"

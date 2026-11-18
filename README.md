@@ -8,8 +8,9 @@ machine in sync.
 - **Tools and languages:** [mise](https://mise.jdx.dev): no root needed, per-project versions
 - **Base packages:** the OS package manager (apt, Homebrew)
 
-> **Status: v2 milestone 3.** Supported today: Ubuntu / Debian (including WSL 2)
-> and macOS. Fedora/Arch/Alpine and Windows follow. See [docs/v2-design.md](docs/v2-design.md).
+> **Status: v2 milestone 4.** Supported today: Ubuntu / Debian (including WSL 2),
+> Fedora, Arch and macOS, on x86_64 and arm64; Alpine with the `minimal` profile.
+> Windows follows. See [docs/v2-design.md](docs/v2-design.md).
 > The v1 Stow-based setup is tagged `v1.0.0`.
 
 ## Install
@@ -119,6 +120,24 @@ files are honoured automatically.
 - macOS's `path_helper` reorders PATH for login shells; `~/.zprofile` puts
   `~/.local/bin` and the mise shims back in front.
 
+## Linux notes
+
+- **Package managers:** apt, dnf, pacman or apk installs only the base packages
+  (`home/.chezmoidata/packages.yaml`); mise installs the rest. On Arch,
+  installing packages means `pacman -Syu`, which upgrades the whole system.
+- **Docker** comes from Docker's own repos on Ubuntu/Debian and Fedora/RHEL, and
+  from Arch's packages on Arch.
+- **Alpine** supports the `minimal` profile only (and defaults to it): Node and
+  Python have no musl builds. Neovim and jless come from apk. A fresh Alpine has
+  no curl: `wget -qO- …/install.sh | sh` works too.
+- **No sudo** (a shared server): `dev setup --no-sudo` never runs sudo, even
+  where it would work. It's remembered for the machine (`--no-sudo=false` turns
+  it off), and such a machine defaults to the `minimal` profile. Everything
+  mise installs still lands in your home; base packages, Docker and the login
+  shell change are skipped and listed in `skipped.log` (`dev doctor` reports
+  them as skipped, not failed). Without sudo, git, curl and bash must already
+  be installed, and zsh too if you want it as your shell.
+
 ## WSL notes
 
 - **Docker needs systemd.** If it's off, the installer offers to add
@@ -135,6 +154,8 @@ make check             # shellcheck, Go tests + render tests (no Docker; never t
 make test FILTER=theme # one render test
 make build             # cli/dist/dev
 make test-containers   # full install + verify in clean Ubuntu/Debian containers
+ci/run-containers.sh fedora:43 archlinux:latest alpine:3.22   # other distros
+NOSUDO=1 PROFILES=minimal ci/run-containers.sh                 # a machine without sudo
 make verify            # dev doctor + a second-install no-op check against this machine
 ```
 

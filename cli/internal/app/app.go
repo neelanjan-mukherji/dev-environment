@@ -82,6 +82,7 @@ func migrateCmd(d Deps) *cobra.Command { return setupLike(d, "migrate-v1", true)
 func setupLike(d Deps, use string, migrate bool) *cobra.Command {
 	var o setup.Options
 	var config string
+	var noSudo bool
 	short := "Install and configure this machine (safe to re-run)"
 	if migrate {
 		short = "Move a v1 (GNU Stow) machine to this setup; suggests the full profile"
@@ -96,6 +97,9 @@ and --config machine.yaml takes the same keys (flags win over the file).
 Answers are remembered; later runs only confirm them.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if cmd.Flags().Changed("no-sudo") {
+				o.NoSudo = &noSudo
+			}
 			if config != "" {
 				file, err := setup.LoadConfig(config)
 				if err != nil {
@@ -120,6 +124,7 @@ Answers are remembered; later runs only confirm them.`,
 	f.StringSliceVar(&o.Remove, "remove", nil, "components to leave out")
 	f.StringVar(&o.Theme, "theme", "", "catppuccin flavor: latte, frappe, macchiato, mocha")
 	f.BoolVarP(&o.Yes, "yes", "y", false, "no questions: accept defaults and confirmations")
+	f.BoolVar(&noSudo, "no-sudo", false, "never use sudo here (remembered; --no-sudo=false undoes it): root-only steps are skipped")
 	f.BoolVar(&o.DryRun, "dry-run", false, "show what would change, change nothing")
 	f.BoolVar(&o.Resume, "resume", false, "only retry the install steps that failed last time")
 	f.BoolVar(&o.SSHKey, "ssh-key", false, "with --yes: create ~/.ssh/id_ed25519 if missing")
@@ -144,6 +149,7 @@ func mergeFlags(cmd *cobra.Command, file, flags setup.Options) setup.Options {
 	set("remove", func() { o.Remove = flags.Remove })
 	set("theme", func() { o.Theme = flags.Theme })
 	set("yes", func() { o.Yes = flags.Yes })
+	set("no-sudo", func() { o.NoSudo = flags.NoSudo })
 	set("ssh-key", func() { o.SSHKey = flags.SSHKey })
 	set("github", func() { o.GitHub = flags.GitHub })
 	set("skip-identity", func() { o.SkipIdentity = flags.SkipIdentity })

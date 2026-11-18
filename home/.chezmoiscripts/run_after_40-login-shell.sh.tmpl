@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs on every apply so a skipped change (no sudo yet) is retried; silent once
-# zsh is the login shell. A "no" is remembered until the marker file is deleted.
+# zsh is the login shell, and while it is still impossible after being reported once. A "no" is remembered until the marker file is deleted.
 set -Eeuo pipefail
 {{ template "lib.sh" . }}
 
@@ -10,10 +10,23 @@ current="$(login_shell "$user")"
 declined="$DEVENV_STATE/login-shell.declined"
 [ -n "$zsh_path" ] && [ "$(basename "$current")" = zsh ] && exit 0
 [ -f "$declined" ] && exit 0
+# Can't be done yet (no zsh; or no sudo and nobody to type a password)? Say so
+# once, then stay quiet until that changes, so a re-apply stays a no-op.
+waiting="$DEVENV_STATE/login-shell.waiting"
+blocked() { [ -z "$zsh_path" ] || { ! have_tty && ! can_sudo; }; }
+if [ -f "$waiting" ] && blocked; then exit 0; fi
+rm -f "$waiting"
 
 step "Login shell"
 if [ -z "$zsh_path" ]; then
+    : >"$waiting"
     record_skip "login shell: zsh is not installed, the bash fallback stays active"
+    exit 0
+fi
+# Impossible without sudo or someone to type a password: say so once.
+if ! have_tty && ! can_sudo; then
+    : >"$waiting"
+    record_skip "login shell change (needs sudo or your password; retried when either is available)"
     exit 0
 fi
 if ! confirm "Change the login shell for $user from $current to $zsh_path?"; then

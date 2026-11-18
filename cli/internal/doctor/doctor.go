@@ -149,10 +149,16 @@ func Checks(m Machine) []Check {
 	}
 
 	on := func(c string) bool { return slices.Contains(m.Components, c) }
+	// Docker is skipped, not failed, where it can't be installed (no sudo, Alpine).
+	dockerSkipped := skippedStep(m.State, "docker", "docker.skipped")
 	for _, c := range componentTools {
 		if on(c.name) {
 			for _, t := range c.tools {
-				cs = append(cs, zsh("zsh has "+t, "command -v "+t))
+				check := zsh("zsh has "+t, "command -v "+t)
+				if c.name == "docker" {
+					check.Skipped = dockerSkipped
+				}
+				cs = append(cs, check)
 			}
 		} else if c.mise {
 			cs = append(cs, zsh("mise does not manage "+c.name, "! mise which "+c.tools[0]))
@@ -171,7 +177,9 @@ func Checks(m Machine) []Check {
 		cs = append(cs, zsh("node is the pinned major", `node --version | grep -q "^v26\."`))
 	}
 	if on("docker") {
-		cs = append(cs, bash("docker compose plugin", `docker compose version`))
+		compose := bash("docker compose plugin", `docker compose version`)
+		compose.Skipped = dockerSkipped
+		cs = append(cs, compose)
 	}
 	if on("java") {
 		cs = append(cs, zsh("default JDK is Corretto 21", `java -version 2>&1 | grep -q "Corretto-21"`))

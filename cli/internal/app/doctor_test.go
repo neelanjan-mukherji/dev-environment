@@ -115,6 +115,17 @@ func TestDoctorReportsARecordedSkipAsSkippedNotFailed(t *testing.T) {
 	}
 }
 
+func TestDoctorReportsASkippedDockerInstallAsSkipped(t *testing.T) {
+	// No sudo, or Alpine: the docker step records a skip instead of installing.
+	b := newBox(t)
+	write(t, filepath.Join(b.state, "skipped.log"), "2026-11-18 10:00:00\tdocker (needs sudo)\n")
+	r := &fakeRunner{rules: []rule{machine("dev", "docker", ""), {match: "docker", fail: true}}}
+	out, code := doctor(t, r)
+	if code != 0 || !strings.Contains(out, "skip zsh has docker") || !strings.Contains(out, "skip docker compose plugin") {
+		t.Fatalf("exit %d, want the docker checks reported as skipped\n%s", code, out)
+	}
+}
+
 func TestDoctorQuotesTheEmailForTheShell(t *testing.T) {
 	r := &fakeRunner{rules: []rule{machine("minimal", "", "a$(touch x)@example.com")}}
 	doctor(t, r)

@@ -27,14 +27,20 @@ jobs:
       - run: make check
 
   containers:
-    name: install ${{ matrix.base }} / ${{ matrix.profile }}
+    name: install ${{ matrix.base }} / ${{ matrix.profile }} / ${{ matrix.arch }}
     needs: check
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     strategy:
       fail-fast: false
       matrix:
-        base: ["ubuntu:24.04", "debian:13"]
+        base: ["ubuntu:24.04", "debian:13", "fedora:43", "archlinux:latest", "alpine:3.22"]
         profile: [minimal, full]
+        arch: [amd64, arm64]
+        exclude:
+          - base: "archlinux:latest" # no official arm64 image
+            arch: arm64
+          - base: "alpine:3.22" # minimal only (docs/v2-design.md)
+            profile: full
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -47,13 +53,31 @@ jobs:
           PROFILES: ${{ matrix.profile }}
         run: ci/run-containers.sh "${{ matrix.base }}"
 
-  macos:
-    name: install macOS / ${{ matrix.profile }}
+  no-sudo:
+    name: install without sudo (ubuntu:24.04 / minimal)
     needs: check
-    runs-on: macos-latest
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+      - name: Install and verify on a machine with no sudo
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROFILES: minimal
+          NOSUDO: "1"
+        run: ci/run-containers.sh ubuntu:24.04
+
+  macos:
+    name: install macOS ${{ matrix.runner }} / ${{ matrix.profile }}
+    needs: check
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
+        runner: [macos-latest, macos-15-intel] # Apple silicon, Intel
         profile: [minimal, full]
     steps:
       - uses: actions/checkout@v4
