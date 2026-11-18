@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same branch cancels the older run (no queue of stale jobs,
+# notably the few macOS runners).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     name: shellcheck + render tests
