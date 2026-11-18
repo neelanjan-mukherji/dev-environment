@@ -114,6 +114,8 @@ test_unknown_component_is_rejected() {
     ! render bad-component dev DEVENV_ADD=nope 2>&1
 }
 
+# Interactive shells get 60s: one waiting for an answer (e.g. compinit's
+# "insecure directories" question) fails its test instead of hanging CI.
 # Start an interactive shell against the rendered home with no plugins or
 # mise-managed tools present (externals and scripts are excluded), and no network.
 shell_in_home() {
@@ -122,13 +124,25 @@ shell_in_home() {
     # `script` gives the shell a real pty, as in normal use. Any warning or error
     # it prints shows up as extra output, so the marker must be the only line.
     out="$(env -i HOME="$home" PATH="/usr/bin:/bin" TERM=xterm-256color \
-        script -qec "$sh -i -c '$* && echo __OK__'" /dev/null </dev/null | tr -d '\r')"
+        timeout -k 5 60 script -qec "$sh -i -c '$* && echo __OK__'" /dev/null </dev/null | tr -d '\r')"
     [[ "$out" == "__OK__" ]] || { echo "    $sh output (expected only __OK__):"; printf '%s\n' "$out" | sed 's/^/      /'; return 1; }
 }
 
 test_zsh_starts_cleanly_without_plugins_and_has_shared_aliases() {
     render zsh minimal
     shell_in_home zsh 'alias gs >/dev/null && (( ${+galiases[G]} )) && whence -w y zi >/dev/null'
+}
+
+test_zsh_does_not_stop_at_insecure_completion_dirs() {
+    # GitHub's runner image has world-writable completion dirs; a plain compinit
+    # asks about them and an unattended shell waits forever.
+    render zsh-insecure minimal
+    local d="$work/insecure-fpath" fp out
+    mkdir -p "$d"; chmod 777 "$d"
+    fp="$(env -i zsh -fc 'echo $FPATH')"
+    out="$(env -i HOME="$home" PATH="/usr/bin:/bin" TERM=xterm-256color FPATH="$d:$fp" \
+        timeout -k 5 30 script -qec "zsh -i -c 'echo __OK__'" /dev/null </dev/null | tr -d '\r')"
+    [[ "$out" == *__OK__* ]] || { echo "    zsh did not start:"; printf '%s\n' "$out" | sed 's/^/      /'; return 1; }
 }
 
 test_bash_fallback_has_the_same_aliases_and_functions() {
@@ -139,7 +153,7 @@ test_bash_fallback_has_the_same_aliases_and_functions() {
 # shell_output <shell> <command>: what an interactive shell in $home prints.
 shell_output() {
     env -i HOME="$home" PATH="/usr/bin:/bin" TERM=xterm-256color \
-        script -qec "$1 -i -c '$2'" /dev/null </dev/null | tr -d '\r'
+        timeout -k 5 60 script -qec "$1 -i -c '$2'" /dev/null </dev/null | tr -d '\r'
 }
 
 test_shells_say_once_a_day_when_the_repo_is_behind_and_never_update() {
@@ -757,6 +771,17 @@ JSON
             --cache "$work/scripts-minimal-windows/cache" --persistent-state "$work/scripts-minimal-windows/state.boltdb" >"$lib"
     if pw "$lib" >/dev/null; then echo "    a failing command did not fail the step"; return 1; fi
     grep -q 'Frobnicate (pwsh exited with 3)' "$h/.local/state/dev/failed.log" || { cat "$h/.local/state/dev/failed.log"; return 1; }
+}
+
+test_jless_is_left_out_on_linux_arm64_where_it_has_no_build() {
+    render arm64 minimal
+    "$CHEZMOI" apply --source "$repo" --no-tty --force --config "$work/arm64/chezmoi.toml" --cache "$work/arm64/cache" \
+        --persistent-state "$work/arm64/state.boltdb" --destination "$home" --exclude scripts,externals \
+        --override-data '{"chezmoi":{"os":"linux","arch":"arm64"}}'
+    lacks .config/mise/config.toml 'jless ='
+    has .config/mise/config.toml 'ripgrep = "latest"'
+    RENDER_OS=darwin render arm64-mac minimal   # macOS arm64 has a build
+    has .config/mise/config.toml 'jless = "latest"'
 }
 
 test_a_failing_step_is_logged_with_its_name() {

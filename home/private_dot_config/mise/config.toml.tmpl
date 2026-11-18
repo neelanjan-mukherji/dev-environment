@@ -1,6 +1,8 @@
 {{- $on := includeTemplate "components" . | splitList "," -}}
 {{- /* Alpine (musl): Neovim and jless only publish glibc builds, so apk installs them (packages.yaml). */ -}}
 {{- $alpine := eq (dig "osRelease" "id" "" .chezmoi) "alpine" -}}
+{{- /* jless publishes no Linux arm64 build: left out there (dev doctor skips it too). */ -}}
+{{- $jless := not (or $alpine (and (eq .chezmoi.os "linux") (eq .chezmoi.arch "arm64"))) -}}
 # Managed by chezmoi from ~/dev-environment (profile: {{ .profile }}). Edit the source, not this file.
 # Policy: small CLI tools track "latest"; toolchains are pinned and bumped deliberately.
 
@@ -17,7 +19,7 @@ eza = "latest"
 fd = "latest"
 fzf = "latest"
 gh = "latest"
-{{- if not $alpine }}
+{{- if $jless }}
 jless = "latest"
 {{- end }}
 jq = "latest"

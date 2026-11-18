@@ -23,7 +23,9 @@ type Machine struct {
 	Components []string
 	Email      string
 	Flavor     string // catppuccin flavor, e.g. "mocha"
-	OS         string // chezmoi's .chezmoi.os: "linux", "darwin"
+	OS         string // chezmoi's .chezmoi.os: "linux", "darwin", "windows"
+	Arch       string // chezmoi's .chezmoi.arch: "amd64", "arm64"
+	Distro     string // the Linux distro's os-release ID ("ubuntu", "alpine"), else empty
 	State      string // ~/.local/state/dev
 }
 
@@ -33,6 +35,8 @@ const machineTemplate = `{{ .profile }}
 {{ .email }}
 {{ .theme.flavor }}
 {{ .chezmoi.os }}
+{{ .chezmoi.arch }}
+{{ dig "osRelease" "id" "" .chezmoi }}
 `
 
 // ReadMachine asks chezmoi for this machine's configuration.
@@ -42,10 +46,10 @@ func ReadMachine(ctx context.Context, r sys.Runner) (Machine, error) {
 		return Machine{}, fmt.Errorf("reading the machine config with chezmoi (has setup run?): %w\n%s", err, out)
 	}
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	for len(lines) < 5 {
+	for len(lines) < 7 {
 		lines = append(lines, "")
 	}
-	m := Machine{Profile: lines[0], Email: lines[2], Flavor: lines[3], OS: lines[4], State: stateDir()}
+	m := Machine{Profile: lines[0], Email: lines[2], Flavor: lines[3], OS: lines[4], Arch: lines[5], Distro: lines[6], State: stateDir()}
 	if lines[1] != "" {
 		m.Components = strings.Split(lines[1], ",")
 	}
@@ -140,6 +144,10 @@ func Checks(m Machine) []Check {
 	}
 	var cs []Check
 	for _, t := range coreTools {
+		// jless has no Linux arm64 build (Alpine gets it from apk); the mise config leaves it out.
+		if t == "jless" && m.OS == "linux" && m.Arch == "arm64" && m.Distro != "alpine" {
+			continue
+		}
 		cs = append(cs, zsh("zsh has "+t, "command -v "+t))
 	}
 	cs = append(cs,

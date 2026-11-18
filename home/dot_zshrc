@@ -29,7 +29,9 @@ fi
 autoload -Uz compinit
 ZCOMPDUMP="${XDG_CACHE_HOME:-$HOME/.cache}/zsh/zcompdump"
 mkdir -p "${ZCOMPDUMP:h}"
-compinit -d "$ZCOMPDUMP"
+# -i: skip "insecure" (group/world-writable) completion dirs, e.g. some Homebrew or
+# CI images, instead of stopping the shell to ask about them.
+compinit -i -d "$ZCOMPDUMP"
 
 source "$HOME/.config/zsh/completion.zsh"
 

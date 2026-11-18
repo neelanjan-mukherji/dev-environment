@@ -2,3 +2,8 @@
 
 typeset -U path PATH
 . "$HOME/.config/shell/path.sh"
+
+# Debian/Ubuntu's /etc/zsh/zshrc runs its own plain compinit unless this is set;
+# ~/.zshrc runs compinit itself (with -i, which never stops to ask about
+# "insecure" completion dirs), so skip the global one.
+skip_global_compinit=1

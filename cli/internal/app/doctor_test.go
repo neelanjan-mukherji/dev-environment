@@ -18,7 +18,12 @@ func machineWith(profile, components, email, flavor string) rule {
 }
 
 func machineOn(goos, profile, components, email, flavor string) rule {
-	return rule{match: "execute-template", out: profile + "\n" + components + "\n" + email + "\n" + flavor + "\n" + goos + "\n"}
+	return machineFull(goos, "amd64", "ubuntu", profile, components, email, flavor)
+}
+
+// machineFull also sets the CPU and the distro (chezmoi's .chezmoi.arch and osRelease id).
+func machineFull(goos, arch, distro, profile, components, email, flavor string) rule {
+	return rule{match: "execute-template", out: profile + "\n" + components + "\n" + email + "\n" + flavor + "\n" + goos + "\n" + arch + "\n" + distro + "\n"}
 }
 
 const fullComponents = "docker,devtools,node,python,go,rust,kubernetes,java"
@@ -131,5 +136,19 @@ func TestDoctorQuotesTheEmailForTheShell(t *testing.T) {
 	doctor(t, r)
 	if r.called(`'a$(touch x)@example.com'`) < 0 {
 		t.Fatalf("email not single-quoted; calls:\n%s", r.log())
+	}
+}
+
+func TestDoctorSkipsJlessWhereItHasNoBuild(t *testing.T) {
+	// jless publishes no Linux arm64 build; Alpine gets it from apk.
+	for _, c := range []struct {
+		arch, distro string
+		want         bool
+	}{{"amd64", "ubuntu", true}, {"arm64", "ubuntu", false}, {"arm64", "alpine", true}} {
+		r := &fakeRunner{rules: []rule{machineFull("linux", c.arch, c.distro, "minimal", "", "", "mocha")}}
+		doctor(t, r)
+		if got := r.called("command -v jless") >= 0; got != c.want {
+			t.Errorf("%s/%s: jless checked = %v, want %v", c.distro, c.arch, got, c.want)
+		}
 	}
 }
