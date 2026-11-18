@@ -34,7 +34,7 @@ check "neovim plugins restored"           test -d "$HOME/.local/share/nvim/lazy/
 check "bat theme compiled"                in_zsh 'bat --list-themes | grep -q "Catppuccin Mocha"'
 check "bash fallback has tools + aliases" in_bash 'command -v starship && command -v rg && alias gs'
 check "login shell is zsh"                bash -c 'getent passwd "$(id -un)" | cut -d: -f7 | grep -q zsh'
-check "git identity from .gitconfig.local" bash -c '[ "$(git config user.email)" = ci@example.com ]'
+check "git identity from .gitconfig.local"  bash -c 'want="$(chezmoi execute-template "{{ .email }}")" && [ -n "$want" ] && [ "$(git config user.email)" = "$want" ]'
 
 # ---- dev and full
 if [[ $profile == dev || $profile == full ]]; then
