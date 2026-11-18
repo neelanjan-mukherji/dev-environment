@@ -1,0 +1,40 @@
+name: macos
+
+# Run by hand (Actions → macos → Run workflow, or `gh workflow run macos.yml
+# --ref v2`): GitHub's hosted macOS runners are often unavailable ("not acquired
+# by Runner of type hosted"), which would turn every push red.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: install macOS ${{ matrix.runner }} / ${{ matrix.profile }}
+    timeout-minutes: 60
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-latest, macos-15-intel] # Apple silicon, Intel
+        profile: [minimal, full]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+      - name: Build dev
+        run: cd cli && CGO_ENABLED=0 go build -trimpath -o dist/dev .
+      - name: Install
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MISE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEVENV_DEV_BIN: ${{ github.workspace }}/cli/dist/dev
+        run: ./install.sh --yes --profile ${{ matrix.profile }} --name 'CI User' --email ci@example.com
+      - name: Verify
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MISE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ci/verify.sh

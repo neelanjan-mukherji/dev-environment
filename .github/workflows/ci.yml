@@ -8,8 +8,7 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same branch cancels the older run (no queue of stale jobs,
-# notably the few macOS runners).
+# A newer push to the same branch cancels the older run (no queue of stale jobs).
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -78,36 +77,6 @@ jobs:
           PROFILES: minimal
           NOSUDO: "1"
         run: ci/run-containers.sh ubuntu:24.04
-
-  macos:
-    name: install macOS ${{ matrix.runner }} / ${{ matrix.profile }}
-    timeout-minutes: 60
-    needs: check
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [macos-latest, macos-15-intel] # Apple silicon, Intel
-        profile: [minimal, full]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: cli/go.mod
-          cache-dependency-path: cli/go.sum
-      - name: Build dev
-        run: cd cli && CGO_ENABLED=0 go build -trimpath -o dist/dev .
-      - name: Install
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MISE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DEVENV_DEV_BIN: ${{ github.workspace }}/cli/dist/dev
-        run: ./install.sh --yes --profile ${{ matrix.profile }} --name 'CI User' --email ci@example.com
-      - name: Verify
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MISE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ci/verify.sh
 
   windows:
     name: install Windows host
