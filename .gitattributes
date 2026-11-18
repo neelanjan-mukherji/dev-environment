@@ -1,0 +1,5 @@
+# LF everywhere, whatever core.autocrlf says (Git for Windows defaults it to true).
+# The clone is chezmoi's source: CRLF there would land in the rendered files, and
+# tools that rewrite their own file in LF (lazy.nvim's lazy-lock.json) would then
+# leave it out of sync.
+* text=auto eol=lf
