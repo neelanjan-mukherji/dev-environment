@@ -32,58 +32,88 @@ type Tweak struct {
 	} `json:"reads"`
 }
 
-// vscodeInstallSkipped reports whether the step that installs VS Code was
-// skipped: by the Homebrew step on macOS, the winget step on Windows when winget
-// itself is missing, and the Linux step itself ("vscode: …", "vscode (…)", not
-// "vscode extensions: …").
-func vscodeInstallSkipped(m Machine) func() bool {
-	switch m.OS {
+// desktopOS is what the desktop checks need from one OS: which skips mean VS
+// Code wasn't installed, how each check is written there, and its tweaks.
+type desktopOS struct {
+	installSkips []string // skipped.log prefixes of the step that installs VS Code
+	code         func() Check
+	extensions   func(Desktop) []string
+	extension    func(id string) Check
+	settings     func(name, theme string) Check
+	tweakOS      string // in check names: "macOS tweak <id>"
+	tweaks       func(Desktop) []Tweak
+	applied      func(Tweak) Check
+}
+
+// unixDesktop is Linux; macOS differs only where it says so.
+var unixDesktop = desktopOS{
+	// The Linux step's own skips ("vscode: …", "vscode (…)", not "vscode extensions: …").
+	installSkips: []string{"vscode:", "vscode ("},
+	code:         func() Check { return zsh("", "command -v code") }, // the user's PATH (Homebrew's bin on macOS)
+	extensions:   func(d Desktop) []string { return d.Extensions.Shared },
+	// IDs are case-insensitive; the list prints the Marketplace's casing.
+	extension: func(id string) Check { return zsh("", "code --list-extensions | grep -qixF "+shellQuote(id)) },
+	settings:  jqSettings(`"$HOME/.config/Code/User/settings.json"`),
+	tweaks:    func(Desktop) []Tweak { return nil },
+}
+
+func desktopFor(goos string) desktopOS {
+	switch goos {
 	case "darwin":
-		return skippedStep(m.State, "", "homebrew")
+		d := unixDesktop
+		d.installSkips = []string{"homebrew"} // the cask is in the Homebrew step
+		d.settings = jqSettings(`"$HOME/Library/Application Support/Code/User/settings.json"`)
+		d.tweakOS = "macOS"
+		d.tweaks = func(d Desktop) []Tweak { return d.Tweaks.Darwin }
+		d.applied = func(t Tweak) Check { return bash("", macOSApplied(t)) }
+		return d
 	case "windows":
-		return skippedStep(m.State, "", "winget packages: winget is missing")
+		return desktopOS{
+			installSkips: []string{"winget packages: winget is missing"}, // VS Code is in the winget step
+			code:         func() Check { return ps("", "Get-Command code | Out-Null") },
+			extensions: func(d Desktop) []string {
+				return append(d.Extensions.Shared[:len(d.Extensions.Shared):len(d.Extensions.Shared)], d.Extensions.Windows...)
+			},
+			// -notcontains compares case-insensitively.
+			extension: func(id string) Check {
+				return ps("", "$l = @(code --list-extensions); if ($LASTEXITCODE -ne 0 -or $l -notcontains "+psQuote(id)+") { exit 1 }")
+			},
+			settings: func(name, theme string) Check {
+				return ps(name, fmt.Sprintf(`$s = Get-Content -Raw -Encoding UTF8 "$env:APPDATA\Code\User\settings.json" | ConvertFrom-Json; `+
+					`if ($s.'workbench.colorTheme' -cne %s -or $s.'editor.fontFamily' -cne %[2]s -or $s.'terminal.integrated.fontFamily' -cne %[2]s -or $s.'terminal.integrated.fontLigatures.enabled' -ne $false) { exit 1 }`,
+					psQuote(theme), psQuote(vscodeFont)))
+			},
+			tweakOS: "Windows",
+			tweaks:  func(d Desktop) []Tweak { return d.Tweaks.Windows },
+			applied: func(t Tweak) Check { return ps("", windowsApplied(t)) },
+		}
 	}
-	return skippedStep(m.State, "", "vscode:", "vscode (")
+	return unixDesktop
 }
 
 func desktopChecks(m Machine) []Check {
-	installSkipped := vscodeInstallSkipped(m)
-	code := zsh("VS Code: code on PATH", "command -v code") // the user's PATH (Homebrew's bin on macOS)
-	if m.OS == "windows" {
-		code = ps(code.Name, "Get-Command code | Out-Null")
-	}
-	code.Skipped = installSkipped
+	d := desktopFor(m.OS)
+	installSkipped := skippedStep(m.State, "", d.installSkips...)
+	code := d.code()
+	code.Name, code.Skipped = "VS Code: code on PATH", installSkipped
 	cs := []Check{code}
 
 	// Inside WSL, code is the Windows host's, and so are its extensions and settings.
 	if !m.WSL {
-		extensions := m.Desktop.Extensions.Shared
-		if m.OS == "windows" {
-			extensions = append(extensions[:len(extensions):len(extensions)], m.Desktop.Extensions.Windows...)
-		}
 		extSkipped := skippedStep(m.State, "", "vscode extensions")
-		for _, id := range extensions {
-			// IDs are case-insensitive; the list prints the Marketplace's casing.
-			c := zsh("VS Code extension "+id, "code --list-extensions | grep -qixF "+shellQuote(id))
-			if m.OS == "windows" {
-				// -notcontains compares case-insensitively.
-				c = ps(c.Name, "$l = @(code --list-extensions); if ($LASTEXITCODE -ne 0 -or $l -notcontains "+psQuote(id)+") { exit 1 }")
-			}
-			c.Skipped = func() bool { return installSkipped() || extSkipped() }
+		for _, id := range d.extensions(m.Desktop) {
+			c := d.extension(id)
+			c.Name, c.Skipped = "VS Code extension "+id, func() bool { return installSkipped() || extSkipped() }
 			cs = append(cs, c)
 		}
-		cs = append(cs, settingsCheck(m))
+		// The template leaves a file it can't parse (VS Code allows comments) as it is, so this is where that shows.
+		c := d.settings("VS Code settings.json has the shared theme and font", vscodeThemes[m.Flavor])
+		c.Hint = "The shared keys aren't applied while settings.json has comments or trailing commas: remove them, then run chezmoi apply."
+		cs = append(cs, c)
 	}
 
-	switch m.OS {
-	case "darwin":
-		for _, t := range m.Desktop.Tweaks.Darwin {
-			cs = append(cs, tweakCheck(m, "macOS", t, bash("", macOSApplied(t))))
-		}
-	case "windows":
-		for _, t := range m.Desktop.Tweaks.Windows {
-			cs = append(cs, tweakCheck(m, "Windows", t, ps("", windowsApplied(t))))
-		}
+	for _, t := range d.tweaks(m.Desktop) {
+		cs = append(cs, tweakCheck(m, d.tweakOS, t, d.applied(t)))
 	}
 	return cs
 }
@@ -93,28 +123,12 @@ var vscodeThemes = map[string]string{"latte": "Catppuccin Latte", "frappe": "Cat
 
 const vscodeFont = "JetBrainsMono Nerd Font"
 
-// settingsCheck checks the keys the settings.json template owns. The template
-// leaves a file it can't parse (VS Code allows comments) as it is, so this is
-// where that shows.
-func settingsCheck(m Machine) Check {
-	const name = "VS Code settings.json has the shared theme and font"
-	theme := vscodeThemes[m.Flavor]
-	var c Check
-	if m.OS == "windows" {
-		c = ps(name, fmt.Sprintf(`$s = Get-Content -Raw -Encoding UTF8 "$env:APPDATA\Code\User\settings.json" | ConvertFrom-Json; `+
-			`if ($s.'workbench.colorTheme' -cne %s -or $s.'editor.fontFamily' -cne %[2]s -or $s.'terminal.integrated.fontFamily' -cne %[2]s -or $s.'terminal.integrated.fontLigatures.enabled' -ne $false) { exit 1 }`,
-			psQuote(theme), psQuote(vscodeFont)))
-	} else {
-		path := `"$HOME/.config/Code/User/settings.json"`
-		if m.OS == "darwin" {
-			path = `"$HOME/Library/Application Support/Code/User/settings.json"`
-		}
-		// zsh: jq comes from mise.
-		c = zsh(name, fmt.Sprintf(`jq -e --arg t %s --arg f %s '.["workbench.colorTheme"] == $t and .["editor.fontFamily"] == $f and .["terminal.integrated.fontFamily"] == $f and .["terminal.integrated.fontLigatures.enabled"] == false' %s >/dev/null`,
+// jqSettings checks the keys the settings.json template owns at path (zsh: jq comes from mise).
+func jqSettings(path string) func(name, theme string) Check {
+	return func(name, theme string) Check {
+		return zsh(name, fmt.Sprintf(`jq -e --arg t %s --arg f %s '.["workbench.colorTheme"] == $t and .["editor.fontFamily"] == $f and .["terminal.integrated.fontFamily"] == $f and .["terminal.integrated.fontLigatures.enabled"] == false' %s >/dev/null`,
 			shellQuote(theme), shellQuote(vscodeFont), path))
 	}
-	c.Hint = "The shared keys aren't applied while settings.json has comments or trailing commas: remove them, then run chezmoi apply."
-	return c
 }
 
 // tweakCheck passes a tweak that was declined (its marker, as the tweak step
@@ -142,9 +156,10 @@ func macOSApplied(t Tweak) string {
 	return strings.Join(tests, " && ")
 }
 
-// readRegistry reads a registry value with reg.exe, as the tweak step does: the
-// value as text (a DWORD in decimal), '' for an empty string, $null when the key
-// or value is missing (an unset default value too). Name '' = the key's default.
+// readRegistry reads a registry value with reg.exe: the value as text (a DWORD in
+// decimal), ” for an empty string, $null when the key or value is missing (an
+// unset default value too). Name ” = the key's default. The Windows tweak step
+// has the same Read-Registry; go:embed can't reach home/, so change both together.
 const readRegistry = `function Read-Registry([string]$Key, [string]$Name) {
     $ErrorActionPreference = 'Continue'
     if ($Name) { $which = @('/v', $Name) } else { $which = @('/ve') }
