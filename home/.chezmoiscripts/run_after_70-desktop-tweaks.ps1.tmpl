@@ -1,0 +1,82 @@
+{{- $on := includeTemplate "components" . | splitList "," -}}
+{{- if has "desktop" $on -}}
+# Explorer preferences from the desktop data (.desktop.tweaks.windows): per-user
+# (HKCU) only, each read back first, shown with its exact registry change and
+# asked about on its own. Silent when every tweak is applied or declined; a "no"
+# leaves ~/.local/state/dev/declined-tweak-<id> until that file is deleted.
+# Reads and writes go through reg.exe (not the HKCU: drive), as the command shown does.
+{{ template "lib.ps1" . }}
+
+$tweaks = @(
+{{- range .desktop.tweaks.windows }}
+    @{ Id = '{{ .id }}'; Description = '{{ .description | replace "'" "''" }}'; Command = '{{ .command | replace "'" "''" }}'
+       Restart = '{{ .restart }}'; MinBuild = {{ .min_build | int }}; Reads = @(
+{{- range .reads }}
+        @{ Key = '{{ .key | replace "'" "''" }}'; Name = '{{ .name | replace "'" "''" }}'; Value = '{{ .value | replace "'" "''" }}' }
+{{- end }}
+    ) }
+{{- end }}
+)
+
+# Read-Registry <key> <name>: the value as text (a DWORD in decimal), '' for an empty
+# string, $null when the key or value doesn't exist. Name '' = the key's default value.
+function Read-Registry([string]$Key, [string]$Name) {
+    $ErrorActionPreference = 'Continue'
+    if ($Name) { $which = @('/v', $Name) } else { $which = @('/ve') }
+    $out = & reg.exe query $Key @which 2>$null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    foreach ($line in $out) {
+        # "    <name>    <type>    <data>"; an unset default value reads as
+        # "(value not set)" (localized), so it never equals ''.
+        if ("$line" -match '^ {4}.*? {4}(REG_[A-Z_]+)(?: {4}(.*))?$') {
+            $data = "$($Matches[2])"
+            if ($Matches[1] -eq 'REG_DWORD') { return [string][Convert]::ToInt64($data.Substring(2), 16) }
+            return $data
+        }
+    }
+    return $null
+}
+function Test-Applied($Tweak) {
+    foreach ($r in $Tweak.Reads) {
+        if ((Read-Registry $r.Key $r.Name) -cne $r.Value) { return $false }
+    }
+    return $true
+}
+function Get-DeclinedMarker($Tweak) { Join-Path $DevState "declined-tweak-$($Tweak.Id)" }
+
+$build = [int](Read-Registry 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion' 'CurrentBuildNumber')
+$todo = @($tweaks | Where-Object {
+    $build -ge $_.MinBuild -and -not (Test-Path (Get-DeclinedMarker $_)) -and -not (Test-Applied $_)
+})
+if ($todo.Count -eq 0) { exit 0 }
+
+Step 'OS tweaks'
+$restart = @()
+foreach ($t in $todo) {
+    Info "$($t.Description):"
+    Info "  $($t.Command)"
+    if (-not (Confirm-Step 'Apply it?')) {
+        if (-not [Console]::IsInputRedirected) {
+            $marker = Get-DeclinedMarker $t
+            New-Item -ItemType File -Force -Path $marker | Out-Null
+            Info "Won't ask again. To be asked next time: Remove-Item '$marker'"
+        }
+        Add-Skip "desktop tweak $($t.Id) (declined)"
+        continue
+    }
+    Write-Host "    `$ $($t.Command)" -ForegroundColor DarkGray
+    Invoke-Expression $t.Command | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "$($t.Id): reg.exe exited with $LASTEXITCODE" }
+    if (-not (Test-Applied $t)) { throw "$($t.Id): the registry doesn't read back as changed" }
+    if ($t.Restart -and $restart -notcontains $t.Restart) { $restart += $t.Restart }
+}
+foreach ($p in $restart) {
+    if (Confirm-Step "Restart $p now, so the changes show?") {
+        Write-Host "    `$ Stop-Process -Name $($p.ToLower()) -Force" -ForegroundColor DarkGray
+        # Windows starts Explorer again by itself.
+        Get-Process -Name $p.ToLower() -ErrorAction SilentlyContinue | Stop-Process -Force
+    } else {
+        Info "They show once $p restarts (or at the next sign-in)."
+    }
+}
+{{ end -}}
