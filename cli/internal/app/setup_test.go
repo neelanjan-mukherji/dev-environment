@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"go.yaml.in/yaml/v3"
+
 	"github.com/neelanjan-mukherji/dev-environment/cli/internal/setup"
 )
 
@@ -222,6 +224,32 @@ func TestSetupReadsMachineYamlAndFlagsWin(t *testing.T) {
 	}
 	if r.called("DEVENV_PROFILE=minimal", "DEVENV_NAME=From File", "DEVENV_ADD=cloud", "chezmoi init") < 0 {
 		t.Fatalf("want file values with the --profile flag on top; calls:\n%s", r.log())
+	}
+}
+
+func TestOptionalComponentsAreTheKnownOnesInNoProfile(t *testing.T) {
+	// The profiles as chezmoi has them (home/.chezmoidata/profiles.yaml).
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "home", ".chezmoidata", "profiles.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var data struct{ Profiles map[string][]string }
+	if err := yaml.Unmarshal(raw, &data); err != nil {
+		t.Fatal(err)
+	}
+	var want []string
+	for _, c := range setup.KnownComponents {
+		in := false
+		for _, cs := range data.Profiles {
+			in = in || slices.Contains(cs, c)
+		}
+		if !in {
+			want = append(want, c)
+		}
+	}
+	got := slices.Sorted(slices.Values(setup.OptionalComponents))
+	if slices.Sort(want); !slices.Equal(got, want) {
+		t.Fatalf("setup.OptionalComponents = %v, want the known components in no profile: %v", got, want)
 	}
 }
 
