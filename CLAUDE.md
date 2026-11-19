@@ -59,3 +59,17 @@ Render tests need `chezmoi`, `shellcheck`, `zsh` and `script` (util-linux) on PA
 ## Constraints
 
 The repo will be public: no identities, secrets or machine-specific values in tracked files. Commit with the GitHub noreply email.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on neelanjan-mukherji/dev-environment, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default triage labels: needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root, created only when needed. See `docs/agents/domain.md`.
