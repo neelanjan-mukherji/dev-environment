@@ -73,8 +73,35 @@ yes: true
 | `dev` | + Docker (Engine on Linux, Colima on macOS), Node 26, Python 3.14 + uv, Go 1.27, Rust, kondo |
 | `full` | + Corretto 8/17/21/25 (21 default), Maven, Gradle, Spring Boot CLI, kubectl 1.37, Helm, k9s |
 
-Optional component, off in every profile: `cloud` (awscli, gcloud, azure-cli).
 Toolchains are pinned; small CLI tools track `latest`.
+
+Optional components, off in every profile (`dev add <name>`, or `dev setup --add <name>`):
+
+| Component | Adds |
+|---|---|
+| `cloud` | awscli, gcloud, azure-cli |
+| `desktop` | VS Code, its extensions and shared settings, and reviewed OS tweaks |
+
+**`desktop`**, for a laptop or desktop, never a server:
+
+- **VS Code** from the OS's own package manager: the Homebrew cask on macOS,
+  winget on Windows, Microsoft's repository on apt and dnf distros. Inside WSL
+  it belongs to the Windows host (`code .` opens there through the WSL
+  extension); on Arch, Alpine and without sudo the step is recorded as skipped.
+  An existing VS Code is left alone. The cask updates itself:
+  `dev update --system` (plain `brew upgrade`) skips it, `brew upgrade --greedy` doesn't.
+- **Extensions** from `home/.chezmoidata/desktop.yaml` (Catppuccin, EditorConfig,
+  Dev Containers; plus WSL on Windows) are installed if missing and updated by
+  `dev update`; ones you install yourself stay.
+- **settings.json** gets the Catppuccin flavor and JetBrainsMono Nerd Font
+  (editor and terminal); your other settings are kept. A file with comments or
+  trailing commas is left alone, and `dev doctor` says so.
+- **OS tweaks** (macOS: file extensions, hidden files, Finder path bar, fast key
+  repeat, screenshots in `~/Pictures/Screenshots`; Windows: file extensions,
+  hidden files, the classic Windows 11 context menu) are per-user only. Each is
+  shown with its exact command and asked about on its own (`--yes` applies
+  them); a "no" is remembered in `~/.local/state/dev/tweak-<id>.declined`.
+- `dev remove desktop` stops managing all this; nothing is uninstalled or reverted.
 
 ### Per-machine settings
 
