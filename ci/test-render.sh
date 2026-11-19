@@ -959,6 +959,108 @@ test_bootstrap_refuses_a_release_whose_checksum_does_not_match() {
     [[ ! -e "$root/home/.local/bin/dev" ]]
 }
 
+# ---- Desktop: VS Code install on macOS and Windows (#3)
+# IDs from Homebrew (formulae.brew.sh/cask/visual-studio-code) and winget-pkgs
+# (manifests/m/Microsoft/VisualStudioCode), not from our data files.
+
+# vscode_scripts <tag> <os> [VAR=value...]: the install scripts chezmoi runs on <os>
+# for a minimal machine with those overrides, as "name<TAB>rendered path".
+vscode_scripts() {
+    local root="$work/vscode-$1" os="$2"; shift 2
+    rm -rf "$root"
+    init_config "$root" "$@"
+    local f out
+    for f in $("$CHEZMOI" managed --source "$repo" --config "$root/chezmoi.toml" --cache "$root/cache" \
+        --persistent-state "$root/state.boltdb" --destination "$root/home" --include scripts \
+        --path-style source-relative --override-data "{\"chezmoi\":{\"os\":\"$os\"}}"); do
+        out="$root/$(basename "$f" .tmpl)"
+        "$CHEZMOI" execute-template --source "$repo" --config "$root/chezmoi.toml" --cache "$root/cache" \
+            --persistent-state "$root/state.boltdb" --override-data "{\"chezmoi\":{\"os\":\"$os\"}}" \
+            <"$repo/home/$f" >"$out"
+        printf '%s\t%s\n' "$(basename "$out")" "$out"
+    done
+}
+
+# vscode_mentions <tag> <os> <id> [VAR=value...]: the scripts on <os> that name <id>.
+vscode_mentions() {
+    local tag="$1" os="$2" id="$3" name out; shift 3
+    while IFS=$'\t' read -r name out; do
+        if grep -qF -- "$id" "$out"; then echo "$name"; fi
+    done < <(vscode_scripts "$tag" "$os" "$@")
+}
+
+test_vscode_is_installed_only_with_desktop_on_and_only_by_its_own_os() {
+    local os got
+    for os in linux darwin windows; do
+        got="$(vscode_mentions "off-$os" "$os" visual-studio-code)$(vscode_mentions "off-$os" "$os" Microsoft.VisualStudioCode)"
+        [[ -z "$got" ]] || { echo "    $os without desktop installs VS Code in: $got"; return 1; }
+    done
+    got="$(vscode_mentions on-darwin darwin visual-studio-code DEVENV_ADD=desktop)"
+    [[ "$got" == *system-packages-darwin.sh ]] || { echo "    darwin cask in: '$got'"; return 1; }
+    got="$(vscode_mentions on-windows windows Microsoft.VisualStudioCode DEVENV_ADD=desktop)"
+    [[ "$got" == *winget-packages.ps1 ]] || { echo "    windows winget in: '$got'"; return 1; }
+    # Neither OS gets the other's package.
+    [[ -z "$(vscode_mentions on-darwin darwin Microsoft.VisualStudioCode DEVENV_ADD=desktop)" ]]
+    [[ -z "$(vscode_mentions on-windows windows visual-studio-code DEVENV_ADD=desktop)" ]]
+    [[ -z "$(vscode_mentions on-linux linux visual-studio-code DEVENV_ADD=desktop)$(vscode_mentions on-linux linux Microsoft.VisualStudioCode DEVENV_ADD=desktop)" ]]
+    shellcheck -s bash "$work/vscode-on-darwin/run_before_11-system-packages-darwin.sh"
+}
+
+test_vscode_cask_is_installed_on_macos_unless_vscode_is_already_there() {
+    local root="$work/vscode-cask" script sys out
+    script="$(vscode_scripts cask-run darwin DEVENV_ADD=desktop | awk -F'\t' '/system-packages-darwin/ {print $2}')"
+    sys="$(system_without brew code)"
+    mkdir -p "$root/bin"
+    # A Homebrew with every formula and the other casks installed; installs are logged.
+    cat >"$root/bin/brew" <<SH
+#!/bin/sh
+case "\$1" in
+    shellenv) ;;
+    list) [ "\$2" = --cask ] && printf 'font-jetbrains-mono-nerd-font\nwezterm\n' || printf 'bash\ngit\ngnupg\ntmux\ntree\nxz\n' ;;
+    *) echo "brew \$*" >>"$root/log" ;;
+esac
+SH
+    chmod +x "$root/bin/brew"
+    mac() { env -i HOME="$root/home" PATH="$root/bin:$sys" XDG_STATE_HOME="$root/state" bash "$script" 2>&1; }
+    mkdir -p "$root/home"; : >"$root/log"
+    out="$(mac)" || { echo "$out"; return 1; }
+    grep -qx 'brew install --cask visual-studio-code' "$root/log" || { echo "$out"; cat "$root/log"; return 1; }
+    # A VS Code installed by hand, as an app or a `code` on PATH, is left alone (and quiet).
+    : >"$root/log"; mkdir -p "$root/home/Applications/Visual Studio Code.app"
+    out="$(mac)"; [[ -z "$out" && ! -s "$root/log" ]] || { echo "$out"; cat "$root/log"; return 1; }
+    rm -rf "$root/home/Applications"
+    printf '#!/bin/sh\n' >"$root/bin/code"; chmod +x "$root/bin/code"
+    out="$(mac)"; [[ -z "$out" && ! -s "$root/log" ]] || { echo "$out"; cat "$root/log"; return 1; }
+}
+
+test_vscode_is_installed_with_winget_for_the_user_unless_code_is_there() {
+    if ! command -v pwsh >/dev/null 2>&1; then
+        echo "    (pwsh not installed: not run; CI runs it)" >&2
+        return 0
+    fi
+    local root="$work/vscode-winget" script out
+    script="$(vscode_scripts winget-run windows DEVENV_ADD=desktop | awk -F'\t' '/winget-packages/ {print $2}')"
+    mkdir -p "$root/bin" "$root/home"
+    # winget has everything but VS Code; calls are logged.
+    cat >"$root/bin/winget" <<SH
+#!/bin/sh
+echo "winget \$*" >>"$root/log"
+case "\$1 \$*" in list*Microsoft.VisualStudioCode*) exit 1 ;; esac
+exit 0
+SH
+    chmod +x "$root/bin/winget"
+    win() { env HOME="$root/home" PATH="$root/bin:$PATH" DEVENV_YES=1 pwsh -NoLogo -NoProfile -File "$script" 2>&1 </dev/null; }
+    : >"$root/log"
+    out="$(win)" || { echo "$out"; return 1; }
+    # User scope: no UAC prompt, no administrator rights.
+    grep -q '^winget install --id Microsoft.VisualStudioCode --exact --source winget .*--scope user' "$root/log" ||
+        { echo "$out"; cat "$root/log"; return 1; }
+    # A `code` already on PATH is left alone.
+    : >"$root/log"; printf '#!/bin/sh\n' >"$root/bin/code"; chmod +x "$root/bin/code"
+    out="$(win)" || { echo "$out"; return 1; }
+    ! grep -q 'Microsoft.VisualStudioCode' "$root/log" || { echo "$out"; cat "$root/log"; return 1; }
+}
+
 # ---------------------------------------------------------------- run
 
 for fn in $(declare -F | awk '{print $3}' | grep '^test_'); do t "${fn#test_}" "$fn"; done
