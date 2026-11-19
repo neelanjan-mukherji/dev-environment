@@ -38,11 +38,14 @@ function Add-Skip([string]$What) {
     Warn "Skipped: $What"
 }
 
+# Show-Command 'command line': echo it as Invoke-Logged does, for a command kept as one string.
+function Show-Command([string]$Line) { Write-Host "    `$ $Line" -ForegroundColor DarkGray }
+
 # Invoke-Logged <command> [arguments...]: shows it, runs it, fails on a non-zero exit.
 # No named parameters: a command's own flags (e.g. -Command) must pass through.
 function Invoke-Logged {
     $command, $arguments = $args
-    Write-Host ("    `$ {0} {1}" -f $command, ($arguments -join ' ')) -ForegroundColor DarkGray
+    Show-Command ('{0} {1}' -f $command, ($arguments -join ' '))
     & $command @arguments
     if ($LASTEXITCODE -ne 0) { throw "$command exited with $LASTEXITCODE" }
 }
@@ -57,12 +60,32 @@ function Test-Native {
     return $LASTEXITCODE -eq 0
 }
 
+function Test-AssumeYes { return $env:DEVENV_YES -eq '1' }
+function Test-HaveTty { return -not [Console]::IsInputRedirected }
+
 # Confirm-Step "Question?": yes under --yes; no when there is nobody to ask.
 function Confirm-Step([string]$Question) {
-    if ($env:DEVENV_YES -eq '1') { Info "$Question -> yes (--yes)"; return $true }
-    if ([Console]::IsInputRedirected) { return $false }
+    if (Test-AssumeYes) { Info "$Question -> yes (--yes)"; return $true }
+    if (-not (Test-HaveTty)) { return $false }
     $answer = Read-Host "    ? $Question [y/N]"
     return $answer -match '^(y|yes)$'
+}
+
+# Test-NobodyToAsk <marker> <step name> <skip text>: true when there is nobody to
+# ask (no terminal, no --yes); says so once (the step and a skip), then stays
+# quiet while <marker> in the state dir exists. False (marker gone) when someone can answer.
+function Test-NobodyToAsk([string]$Marker, [string]$StepName, [string]$Skip) {
+    $path = Join-Path $DevState $Marker
+    if ((Test-AssumeYes) -or (Test-HaveTty)) {
+        Remove-Item -Force -ErrorAction SilentlyContinue $path
+        return $false
+    }
+    if (-not (Test-Path $path)) {
+        Step $StepName
+        New-Item -ItemType File -Force -Path $path | Out-Null
+        Add-Skip $Skip
+    }
+    return $true
 }
 
 # Update-Path: pick up what installers added to PATH (a running process keeps its own).

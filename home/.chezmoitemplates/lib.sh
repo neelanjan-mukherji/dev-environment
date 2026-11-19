@@ -46,8 +46,23 @@ confirm() {
     case "$answer" in y | Y | yes | YES) return 0 ;; *) return 1 ;; esac
 }
 
+# nobody_to_ask <marker> <step name> <skip text>: true when there is nobody to
+# ask (no terminal, no --yes); says so once (the step and a skip), then stays
+# quiet while $DEVENV_STATE/<marker> exists. False (marker gone) when someone can answer.
+nobody_to_ask() {
+    local marker="$DEVENV_STATE/$1"
+    if assume_yes || have_tty; then rm -f "$marker"; return 1; fi
+    if [ ! -f "$marker" ]; then
+        step "$2"
+        : >"$marker"
+        record_skip "$3"
+    fi
+}
+
+# show <command line>: echo it as `run` does, for a command kept as one string.
 # Echo to stderr so the command stays visible when its output is redirected.
-run() { printf '\033[2m    $ %s\033[0m\n' "$*" >&2; "$@"; }
+show() { printf '\033[2m    $ %s\033[0m\n' "$*" >&2; }
+run() { show "$@"; "$@"; }
 
 as_root() {
     if [ "$(id -u)" = 0 ]; then run "$@"; else run sudo "$@"; fi

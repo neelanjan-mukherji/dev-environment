@@ -40,15 +40,10 @@ each_tweak count_pending
 [ "$pending" -eq 0 ] && exit 0
 
 # Nobody to ask (no terminal, no --yes): say so once, then stay quiet until there is.
-waiting="$DEVENV_STATE/macos-tweaks.waiting"
-if ! assume_yes && ! have_tty; then
-    [ -f "$waiting" ] && exit 0
-    step "macOS tweaks"
-    : >"$waiting"
-    record_skip "macos tweaks: $pending not applied, nobody to ask (run dev setup in a terminal, or with --yes)"
+if nobody_to_ask macos-tweaks.waiting "macOS tweaks" \
+    "macos tweaks: $pending not applied, nobody to ask (run dev setup in a terminal, or with --yes)"; then
     exit 0
 fi
-rm -f "$waiting"
 
 step "macOS tweaks"
 restarts=""
@@ -65,7 +60,7 @@ offer() {
         record_skip "macos tweak $id (declined)"
         return 0
     fi
-    printf '\033[2m    $ %s\033[0m\n' "$command" >&2
+    show "$command"
     sh -c "$command"
     case " $restarts " in *" $restart "*) ;; *) restarts="$restarts $restart" ;; esac
 }

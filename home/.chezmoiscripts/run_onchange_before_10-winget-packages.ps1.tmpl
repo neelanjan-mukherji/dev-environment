@@ -31,7 +31,7 @@ if ($missing.Count -eq 0) {
             '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity')
         if ($p.Version) { $install += @('--version', $p.Version) }
         if ($p.Scope) { $install += @('--scope', $p.Scope) }
-        Write-Host ("    `$ winget {0}" -f ($install -join ' ')) -ForegroundColor DarkGray
+        Show-Command ('winget {0}' -f ($install -join ' '))
         winget @install
         # Already there under another source (e.g. Windows Terminal from the Store):
         # APPINSTALLER_CLI_ERROR_PACKAGE_ALREADY_INSTALLED / UPDATE_NOT_APPLICABLE.
