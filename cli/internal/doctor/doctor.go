@@ -67,6 +67,9 @@ func ReadMachine(ctx context.Context, r sys.Runner) (Machine, error) {
 	return m, nil
 }
 
+// on reports whether component c is on (effective) on this machine.
+func (m Machine) on(c string) bool { return slices.Contains(m.Components, c) }
+
 func stateDir() string {
 	if x := os.Getenv("XDG_STATE_HOME"); x != "" {
 		return filepath.Join(x, "dev")
@@ -181,11 +184,10 @@ func Checks(m Machine) []Check {
 		cs = append(cs, bash("git identity from .gitconfig.local", `[ "$(git config user.email)" = `+shellQuote(m.Email)+` ]`))
 	}
 
-	on := func(c string) bool { return slices.Contains(m.Components, c) }
 	// Docker is skipped, not failed, where it can't be installed (no sudo, Alpine).
 	dockerSkipped := skippedStep(m.State, "docker.skipped", "docker")
 	for _, c := range componentTools {
-		if on(c.name) {
+		if m.on(c.name) {
 			for _, t := range c.tools {
 				check := zsh("zsh has "+t, "command -v "+t)
 				if c.name == "docker" {
@@ -197,7 +199,7 @@ func Checks(m Machine) []Check {
 			cs = append(cs, zsh("mise does not manage "+c.name, "! mise which "+c.tools[0]))
 		}
 	}
-	if on("desktop") {
+	if m.on("desktop") {
 		cs = append(cs, desktopChecks(m)...)
 	}
 	if m.OS == "darwin" {
@@ -205,19 +207,19 @@ func Checks(m Machine) []Check {
 			bash("WezTerm installed", `test -d /Applications/WezTerm.app || test -d "$HOME/Applications/WezTerm.app" || command -v wezterm`),
 			bash("JetBrainsMono Nerd Font installed", `ls "$HOME/Library/Fonts" /Library/Fonts 2>/dev/null | grep -qi 'JetBrainsMonoNerdFont'`),
 		)
-		if on("docker") {
+		if m.on("docker") {
 			cs = append(cs, zsh("zsh has colima", "command -v colima"))
 		}
 	}
-	if on("node") {
+	if m.on("node") {
 		cs = append(cs, zsh("node is the pinned major", `node --version | grep -q "^v26\."`))
 	}
-	if on("docker") {
+	if m.on("docker") {
 		compose := bash("docker compose plugin", `docker compose version`)
 		compose.Skipped = dockerSkipped
 		cs = append(cs, compose)
 	}
-	if on("java") {
+	if m.on("java") {
 		cs = append(cs, zsh("default JDK is Corretto 21", `java -version 2>&1 | grep -q "Corretto-21"`))
 		for _, v := range []string{"8", "17", "25"} {
 			cs = append(cs, zsh("Corretto "+v+" installed", "mise where java@corretto-"+v))

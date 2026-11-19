@@ -2,7 +2,6 @@ package doctor
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 )
 
@@ -45,7 +44,7 @@ func windowsChecks(m Machine) []Check {
 	}
 	wsl := ps("WSL has a Linux distro", `$env:WSL_UTF8 = '1'; $d = wsl.exe --list --quiet; if ($LASTEXITCODE -ne 0 -or -not ($d | Where-Object { $_ -and $_ -notlike 'docker-desktop*' })) { exit 1 }`)
 	wsl.Skipped = skippedStep(m.State, "wsl.skipped", "wsl")
-	if slices.Contains(m.Components, "desktop") {
+	if m.on("desktop") {
 		cs = append(cs, desktopChecks(m)...)
 	}
 	cs = append(cs, wsl,
