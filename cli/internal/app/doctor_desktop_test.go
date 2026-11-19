@@ -203,6 +203,17 @@ func TestDoctorReportsTweaksNobodyWasAskedAboutAsSkipped(t *testing.T) {
 	}
 }
 
+func TestDoctorCountsOnlyAMissingWingetAsTheWindowsVSCodeSkip(t *testing.T) {
+	// Another winget packages skip (not about winget itself) says nothing about VS Code.
+	b := newBox(t)
+	write(t, filepath.Join(b.state, "skipped.log"), "2026-11-19 10:00:00\twinget packages: Microsoft.WindowsTerminal not installed\n")
+	r := &fakeRunner{rules: []rule{machineOn("windows", "minimal", "desktop", "", "mocha"), {match: "Get-Command code", fail: true}}}
+	out, code := runOn(t, "windows", r, nil, "doctor")
+	if code != 1 || !strings.Contains(out, "FAIL VS Code: code on PATH") {
+		t.Fatalf("exit %d, want the missing code reported as a failure\n%s", code, out)
+	}
+}
+
 func TestDoctorFailsAMissingCodeWhenOnlyTheExtensionsWereSkipped(t *testing.T) {
 	// The extension step's own skip says code is missing; it is not the install skip.
 	b := newBox(t)

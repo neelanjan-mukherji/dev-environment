@@ -33,14 +33,15 @@ type Tweak struct {
 }
 
 // vscodeInstallSkipped reports whether the step that installs VS Code was
-// skipped: by the Homebrew step on macOS, the winget step on Windows, and the
-// Linux step itself ("vscode: …", "vscode (…)", not "vscode extensions: …").
+// skipped: by the Homebrew step on macOS, the winget step on Windows when winget
+// itself is missing, and the Linux step itself ("vscode: …", "vscode (…)", not
+// "vscode extensions: …").
 func vscodeInstallSkipped(m Machine) func() bool {
 	switch m.OS {
 	case "darwin":
 		return skippedStep(m.State, "", "homebrew")
 	case "windows":
-		return skippedStep(m.State, "", "winget packages")
+		return skippedStep(m.State, "", "winget packages: winget is missing")
 	}
 	return skippedStep(m.State, "", "vscode:", "vscode (")
 }
