@@ -1,3 +1,4 @@
+{{- $on := includeTemplate "components" . | splitList "," -}}
 {{- if eq .chezmoi.os "darwin" -}}
 #!/usr/bin/env bash
 # macOS base packages with Homebrew. Runs on every apply so a skipped or declined
@@ -9,6 +10,13 @@ set -Eeuo pipefail
 
 formulae=({{ range .packages.brew }} {{ . | quote }}{{ end }} )
 casks=({{ range .packages.brew_casks }} {{ . | quote }}{{ end }} )
+{{- if has "desktop" $on }}
+# desktop: VS Code, unless one is already there (installed by hand, or its `code`).
+if ! command -v code >/dev/null 2>&1 &&
+    [ ! -d "/Applications/Visual Studio Code.app" ] && [ ! -d "$HOME/Applications/Visual Studio Code.app" ]; then
+    casks+=("visual-studio-code")
+fi
+{{- end }}
 
 # missing_from <list flag> <names...>: the names brew does not list as installed.
 missing_from() {
