@@ -2,6 +2,8 @@
        the file itself, so only the repo's keys are set and every other key is kept.
        The file is JSONC: when it isn't plain JSON (comments, trailing commas) it is
        left as it is; `dev doctor` reports that the shared keys are missing.
+       toPrettyJson writes a map, so the keys come out sorted: the first apply
+       re-sorts the person's file (values are kept; VS Code doesn't mind the order).
        chezmoi's jq is built in (gojq), so this needs no jq binary, also on Windows. */ -}}
 {{- $in := .chezmoi.stdin -}}
 {{- $s := dict -}}

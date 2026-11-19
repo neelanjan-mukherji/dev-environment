@@ -94,7 +94,8 @@ Optional components, off in every profile (`dev add <name>`, or `dev setup --add
   Dev Containers; plus WSL on Windows) are installed if missing and updated by
   `dev update`; ones you install yourself stay.
 - **settings.json** gets the Catppuccin flavor and JetBrainsMono Nerd Font
-  (editor and terminal); your other settings are kept. A file with comments or
+  (editor and terminal); your other settings are kept, with the keys sorted
+  alphabetically on the first apply. A file with comments or
   trailing commas is left alone, and `dev doctor` says so. Inside WSL the
   Windows host's settings.json is the one that counts, so none is written.
 - **OS tweaks** (macOS: file extensions, hidden files, Finder path bar, fast key
