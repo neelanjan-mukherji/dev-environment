@@ -10,6 +10,9 @@
 [settings]
 # Honour per-project .nvmrc / .node-version / .java-version / .python-version files.
 idiomatic_version_file_enable_tools = ["node", "java", "python"]
+# Maven Central and archive.apache.org rate-limit (429) or stall under load; the
+# default 3 quick retries give up within seconds, 6 back off for a few minutes.
+http_retries = 6
 
 [tools]
 # ---- core CLI (every profile)
@@ -72,7 +75,7 @@ rust = "stable"
 java = ["corretto-21", "corretto-25", "corretto-17", "corretto-8"]
 maven = "latest"
 gradle = "latest"
-spring-boot = "latest"
+spring-boot = "4.1"   # pinned: "latest" includes milestone builds (4.2.0-M2)
 {{- end }}
 {{- if has "kubernetes" $on }}
 

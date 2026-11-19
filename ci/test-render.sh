@@ -84,8 +84,15 @@ test_full_profile_adds_all_four_corretto_jdks_and_kubernetes() {
     has "$f" 'java = ["corretto-21", "corretto-25", "corretto-17", "corretto-8"]'
     has "$f" 'kubectl = "1.37"'
     has "$f" 'k9s = "latest"'
-    has "$f" 'spring-boot = "latest"'
+    # Its "latest" includes milestone builds (4.2.0-M2); it follows the Boot release line.
+    has "$f" 'spring-boot = "4.1"'
     lacks "$f" 'awscli'
+}
+
+test_mise_retries_downloads_long_enough_to_ride_out_rate_limits() {
+    # Maven Central and archive.apache.org answer 429 or time out under load.
+    render mise-retries minimal
+    has .config/mise/config.toml 'http_retries = 6'
 }
 
 test_components_can_be_added_and_removed_on_top_of_a_profile() {
