@@ -110,3 +110,50 @@ func TestRemoveAMachineLocalTool(t *testing.T) {
 		t.Fatalf("want mise unuse from the machine-local config; calls:\n%s", r.log())
 	}
 }
+
+// uninstalls are the commands that would take something off the machine.
+var uninstalls = []string{"uninstall", "unuse", "brew remove", "apt-get remove", "apt-get purge", "dnf remove", "pacman -R", "apk del", "Remove-Item"}
+
+func TestAddDesktopTurnsTheComponentOn(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			b := newBox(t)
+			b.configured(t)
+			r := &fakeRunner{rules: []rule{current("dev", devBase, "", "", devBase, b.repo), rendered("dev", "", "")}}
+			if out, code := runOn(t, goos, r, nil, "add", "desktop", "--yes"); code != 0 {
+				t.Fatalf("exit %d\n%s", code, out)
+			}
+			if r.called("DEVENV_ADD=desktop", "chezmoi init") < 0 {
+				t.Fatalf("want desktop added to the machine config; calls:\n%s", r.log())
+			}
+			if r.called("mise use") >= 0 {
+				t.Errorf("desktop was treated as a mise tool; calls:\n%s", r.log())
+			}
+		})
+	}
+}
+
+func TestRemoveDesktopOnlyChangesTheSelection(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			b := newBox(t)
+			b.configured(t)
+			r := &fakeRunner{rules: []rule{current("dev", devBase, "cloud,desktop", "", devBase+",cloud,desktop", b.repo), rendered("dev", "", "")}}
+			out, code := runOn(t, goos, r, nil, "remove", "desktop", "--yes")
+			if code != 0 {
+				t.Fatalf("exit %d\n%s", code, out)
+			}
+			if r.called("DEVENV_ADD=cloud", "chezmoi init") < 0 || r.called("DEVENV_ADD=cloud,desktop") >= 0 {
+				t.Fatalf("want desktop dropped from the additions; calls:\n%s", r.log())
+			}
+			for _, u := range uninstalls {
+				if i := r.called(u); i >= 0 {
+					t.Errorf("removing desktop ran an uninstall: %s", r.calls[i])
+				}
+			}
+			if !strings.Contains(out, "nothing was uninstalled") {
+				t.Errorf("summary does not say nothing was uninstalled\n%s", out)
+			}
+		})
+	}
+}

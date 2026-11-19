@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -388,11 +389,21 @@ func (r *run) configure(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("rendering the machine config: %w\n%s", err, out)
 	}
-	var cfg struct{ Data Settings }
+	var cfg struct {
+		Data struct {
+			Profile, Name, Email string
+			Components           struct{ Add, Remove []string }
+		}
+	}
 	if _, err := toml.Decode(out, &cfg); err != nil {
 		return fmt.Errorf("reading the rendered machine config: %w", err)
 	}
-	s := cfg.Data
+	s := Settings{Profile: cfg.Data.Profile, Name: cfg.Data.Name, Email: cfg.Data.Email}
+	for _, c := range cfg.Data.Components.Add {
+		if slices.Contains(OptionalComponents, c) {
+			s.Optional = append(s.Optional, c)
+		}
+	}
 
 	if !r.opts.Yes && !r.reconfigure {
 		flagsGiven := r.opts.Profile != "" || r.opts.Name != "" || r.opts.Email != ""
@@ -409,6 +420,13 @@ func (r *run) configure(ctx context.Context) error {
 			if s, err = r.Prompter.EditSettings(s); err != nil {
 				return err
 			}
+			// The form's optional components replace those in the additions; the rest stay.
+			add := slices.DeleteFunc(slices.Clone(cfg.Data.Components.Add), func(c string) bool {
+				return slices.Contains(OptionalComponents, c)
+			})
+			r.opts.Add = append(add, s.Optional...)
+			r.opts.Remove = cfg.Data.Components.Remove
+			r.opts.setComponents = true
 		}
 	}
 

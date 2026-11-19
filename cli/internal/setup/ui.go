@@ -51,6 +51,9 @@ func (u ui) settings(s Settings) {
 		return v
 	}
 	u.info("profile:    " + s.Profile)
+	if len(s.Optional) > 0 {
+		u.info("optional:   " + strings.Join(s.Optional, ", "))
+	}
 	u.info("git name:   " + orNoneDim(s.Name))
 	u.info("git email:  " + orNoneDim(s.Email))
 }
