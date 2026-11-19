@@ -103,6 +103,14 @@ func TestDoctorLeavesExtensionsToTheWindowsHostInsideWSL(t *testing.T) {
 	}
 }
 
+func TestDoctorLeavesSettingsToTheWindowsHostInsideWSL(t *testing.T) {
+	// Inside WSL, settings.json is the host's; chezmoi doesn't write one here.
+	r := &fakeRunner{rules: []rule{desktopMachine("linux", "mocha", true)}}
+	if out, _ := doctor(t, r); strings.Contains(out, "settings.json") || r.called("settings.json") >= 0 {
+		t.Fatalf("checked settings.json inside WSL\n%s", out)
+	}
+}
+
 func TestDoctorChecksVSCodeSettingsHaveTheSharedThemeAndFont(t *testing.T) {
 	// VS Code's settings.json path per OS (VS Code docs), and Catppuccin's theme name per flavor.
 	for goos, path := range map[string]string{

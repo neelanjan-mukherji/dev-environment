@@ -17,7 +17,13 @@ trap 'chmod -R u+w "$work" 2>/dev/null; rm -rf "$work"' EXIT
 
 pass=0 fail=0 failed=()
 
+# Kernel release strings as WSL 2 and a stock Ubuntu kernel report them.
+wsl_kernel=6.6.87.2-microsoft-standard-WSL2
+linux_kernel=6.8.0-45-generic
+
 # render <name> <profile> [env assignments...] -> sets $home
+# RENDER_OS fakes the OS for apply; RENDER_KERNEL the kernel release (default: a
+# stock Linux one, so the result doesn't depend on whether the host is WSL).
 render() {
     local name="$1" profile="$2"; shift 2
     local root="$work/$name"
@@ -28,7 +34,8 @@ render() {
         --config "$root/chezmoi.toml" --cache "$root/cache" --persistent-state "$root/state.boltdb" >/dev/null
     "$CHEZMOI" apply --source "$repo" --no-tty --force \
         --config "$root/chezmoi.toml" --cache "$root/cache" --persistent-state "$root/state.boltdb" \
-        --destination "$home" --exclude scripts,externals ${RENDER_OS:+--override-data "{\"chezmoi\":{\"os\":\"$RENDER_OS\"}}"}
+        --destination "$home" --exclude scripts,externals \
+        --override-data "{\"chezmoi\":{${RENDER_OS:+\"os\":\"$RENDER_OS\",}\"kernel\":{\"osrelease\":\"${RENDER_KERNEL:-$linux_kernel}\"}}}"
 }
 
 has()     { grep -qF -- "$2" "$home/$1" || { echo "    expected '$1' to contain: $2"; return 1; }; }
@@ -437,6 +444,14 @@ test_vscode_settings_go_to_each_oss_path_only_with_desktop() {
     done
 }
 
+test_vscode_settings_are_left_to_the_windows_host_inside_wsl() {
+    # Inside WSL, VS Code (and so its settings.json) is the Windows host's.
+    RENDER_KERNEL="$wsl_kernel" render vscode-wsl minimal DEVENV_ADD=desktop
+    [[ ! -e "$home/.config/Code" ]] || { echo "    WSL got $(find "$home/.config/Code" -type f)"; return 1; }
+    RENDER_KERNEL="$linux_kernel" render vscode-not-wsl minimal DEVENV_ADD=desktop
+    exists "$vscode_settings"
+}
+
 # Render each install script for a profile; prints "<name>\t<rendered path>".
 # render_scripts <profile> [os]: every install script chezmoi runs for that
 # profile (and OS, default this one), rendered; prints "name<TAB>path" per script.
@@ -842,10 +857,6 @@ vscode_linux_run() {
 
 # vscode_skipped <name>: the skip reasons the step recorded.
 vscode_skipped() { cut -f2- "$work/vscode-$1/state/dev/skipped.log" 2>/dev/null; }
-
-# Kernel release strings as WSL 2 and a stock Ubuntu kernel report them.
-wsl_kernel=6.6.87.2-microsoft-standard-WSL2
-linux_kernel=6.8.0-45-generic
 
 test_linux_vscode_step_is_skipped_under_wsl_because_the_host_owns_it() {
     local out path

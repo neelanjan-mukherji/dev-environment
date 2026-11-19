@@ -54,7 +54,7 @@ func desktopChecks(m Machine) []Check {
 	code.Skipped = installSkipped
 	cs := []Check{code}
 
-	// Inside WSL, code is the Windows host's, and so are its extensions.
+	// Inside WSL, code is the Windows host's, and so are its extensions and settings.
 	if !m.WSL {
 		extensions := m.Desktop.Extensions.Shared
 		if m.OS == "windows" {
@@ -71,9 +71,8 @@ func desktopChecks(m Machine) []Check {
 			c.Skipped = func() bool { return installSkipped() || extSkipped() }
 			cs = append(cs, c)
 		}
+		cs = append(cs, settingsCheck(m))
 	}
-
-	cs = append(cs, settingsCheck(m))
 
 	switch m.OS {
 	case "darwin":

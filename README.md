@@ -95,7 +95,8 @@ Optional components, off in every profile (`dev add <name>`, or `dev setup --add
   `dev update`; ones you install yourself stay.
 - **settings.json** gets the Catppuccin flavor and JetBrainsMono Nerd Font
   (editor and terminal); your other settings are kept. A file with comments or
-  trailing commas is left alone, and `dev doctor` says so.
+  trailing commas is left alone, and `dev doctor` says so. Inside WSL the
+  Windows host's settings.json is the one that counts, so none is written.
 - **OS tweaks** (macOS: file extensions, hidden files, Finder path bar, fast key
   repeat, screenshots in `~/Pictures/Screenshots`; Windows: file extensions,
   hidden files, the classic Windows 11 context menu) are per-user only. Each is
