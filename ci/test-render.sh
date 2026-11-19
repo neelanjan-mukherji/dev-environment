@@ -1164,6 +1164,14 @@ JSON
     grep -q 'Frobnicate (pwsh exited with 3)' "$h/.local/state/dev/failed.log" || { cat "$h/.local/state/dev/failed.log"; return 1; }
 }
 
+# pwsh_bin: prints a dir holding only a link to pwsh, so a pwsh test's PATH can be
+# its fakes plus pwsh and nothing of the host's (no real `code`, no WSL's /mnt/c tools).
+pwsh_bin() {
+    local d="$work/pwshbin"
+    [[ -e "$d/pwsh" ]] || { mkdir -p "$d"; ln -s "$(command -v pwsh)" "$d/pwsh"; }
+    echo "$d"
+}
+
 # ---- Desktop: Windows OS tweaks (#8)
 # The tweak step runs in pwsh against a fake reg.exe (Linux pwsh has no HKCU: drive).
 # Expected keys are Microsoft's (Explorer\Advanced HideFileExt/Hidden, and the
@@ -1228,7 +1236,8 @@ SH
     chmod +x "$tw/bin/reg.exe"
 }
 tweaks_run() {
-    env HOME="$tw/home" FAKE_REG="$tw/registry" PATH="$tw/bin:$PATH" DEVENV_YES="${YES:-1}" \
+    # The fake reg.exe needs bash and coreutils; a Windows reg.exe from WSL's PATH must never run.
+    env HOME="$tw/home" FAKE_REG="$tw/registry" PATH="$tw/bin:$(system_without):$(pwsh_bin)" DEVENV_YES="${YES:-1}" \
         pwsh -NoLogo -NoProfile -File "$tweaks" 2>&1 </dev/null
 }
 # reg_has <key> <name> <type> <data>: the fake registry holds exactly that value.
@@ -1496,7 +1505,8 @@ case "\$1 \$*" in list*Microsoft.VisualStudioCode*) exit 1 ;; esac
 exit 0
 SH
     chmod +x "$root/bin/winget"
-    win() { env HOME="$root/home" PATH="$root/bin:$PATH" DEVENV_YES=1 pwsh -NoLogo -NoProfile -File "$script" 2>&1 </dev/null; }
+    # Only the fakes and pwsh: a host's own `code` (e.g. VS Code under WSL) would hide the install.
+    win() { env HOME="$root/home" PATH="$root/bin:$(pwsh_bin)" DEVENV_YES=1 pwsh -NoLogo -NoProfile -File "$script" 2>&1 </dev/null; }
     : >"$root/log"
     out="$(win)" || { echo "$out"; return 1; }
     # User scope: no UAC prompt, no administrator rights.
