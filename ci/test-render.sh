@@ -358,6 +358,85 @@ test_btop_keeps_its_own_settings_and_only_the_theme_line_is_managed() {
     lacks .config/btop/btop.conf '"Default"'
 }
 
+# ---- desktop: VS Code settings.json (#6)
+# Expected values: Catppuccin's theme labels (github.com/catppuccin/vscode, catppuccin-vsc
+# package.json) and VS Code's setting IDs (code.visualstudio.com/docs/configure/settings).
+vscode_settings=.config/Code/User/settings.json
+
+# vscode_json <file> '<python asserts on s>': load the rendered settings.json as `s`.
+vscode_json() {
+    python3 - "$home/$1" "$2" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1], encoding="utf-8"))
+exec(sys.argv[2])
+PY
+}
+
+test_vscode_settings_keep_the_persons_keys_and_set_the_shared_ones() {
+    render vscode-keep minimal DEVENV_ADD=desktop
+    printf '{\n  "editor.fontSize": 15,\n  "workbench.colorTheme": "Default Dark+",\n  "files.exclude": {"**/.git": true}\n}\n' \
+        > "$home/$vscode_settings"
+    render vscode-keep minimal DEVENV_ADD=desktop
+    vscode_json "$vscode_settings" '
+assert s["editor.fontSize"] == 15, s
+assert s["files.exclude"] == {"**/.git": True}, s
+assert s["workbench.colorTheme"] == "Catppuccin Mocha", s
+assert s["editor.fontFamily"] == "JetBrainsMono Nerd Font", s
+assert s["terminal.integrated.fontFamily"] == "JetBrainsMono Nerd Font", s
+assert s["terminal.integrated.fontLigatures.enabled"] is False, s
+'
+    # Applying again changes nothing (the second-install no-op check).
+    cp "$home/$vscode_settings" "$work/vscode-keep.applied"
+    render vscode-keep minimal DEVENV_ADD=desktop
+    cmp "$work/vscode-keep.applied" "$home/$vscode_settings"
+}
+
+test_vscode_theme_follows_the_flavor_with_catppuccins_published_names() {
+    local flavor want
+    for flavor in latte:'Catppuccin Latte' frappe:'Catppuccin Frappé' macchiato:'Catppuccin Macchiato' mocha:'Catppuccin Mocha'; do
+        want="${flavor#*:}" flavor="${flavor%%:*}"
+        # No settings.json yet: it starts empty.
+        render "vscode-$flavor" minimal DEVENV_ADD=desktop DEVENV_THEME="$flavor"
+        vscode_json "$vscode_settings" "assert s == {
+    'workbench.colorTheme': '$want',
+    'editor.fontFamily': 'JetBrainsMono Nerd Font',
+    'terminal.integrated.fontFamily': 'JetBrainsMono Nerd Font',
+    'terminal.integrated.fontLigatures.enabled': False}, s"
+    done
+}
+
+test_vscode_settings_that_are_not_plain_json_are_left_unchanged() {
+    local fixture="$work/vscode-jsonc.fixture" input
+    render vscode-jsonc minimal DEVENV_ADD=desktop
+    # JSONC as VS Code allows it, a trailing comma, and JSON that isn't an object.
+    for input in '{\n  // my font\n  "editor.fontSize": 15\n}\n' '{ "editor.fontSize": 15, }\n' '[1, 2]\n'; do
+        printf '%b' "$input" > "$fixture"
+        cp "$fixture" "$home/$vscode_settings"
+        render vscode-jsonc minimal DEVENV_ADD=desktop
+        cmp "$fixture" "$home/$vscode_settings" || { echo "    changed: $input"; return 1; }
+    done
+}
+
+test_vscode_settings_go_to_each_oss_path_only_with_desktop() {
+    # code.visualstudio.com/docs/configure/settings: the user settings.json per OS.
+    local os path other found
+    local -A paths=([linux]=.config/Code/User/settings.json
+        [darwin]="Library/Application Support/Code/User/settings.json"
+        [windows]=AppData/Roaming/Code/User/settings.json)
+    for os in linux darwin windows; do
+        path="${paths[$os]}"
+        RENDER_OS="$os" render "vscode-on-$os" minimal DEVENV_ADD=desktop
+        vscode_json "$path" 'assert s["editor.fontFamily"] == "JetBrainsMono Nerd Font", s'
+        for other in "${paths[@]}"; do
+            [[ "$other" == "$path" || ! -e "$home/$other" ]] || { echo "    $os also got $other"; return 1; }
+        done
+        [[ "$os" == darwin || ! -e "$home/Library" ]] || { echo "    $os got a Library folder"; return 1; }
+        RENDER_OS="$os" render "vscode-off-$os" minimal
+        found="$(find "$home" -path '*Code/User*' -print -quit)"
+        [[ -z "$found" ]] || { echo "    $os without desktop got $found"; return 1; }
+    done
+}
+
 # Render each install script for a profile; prints "<name>\t<rendered path>".
 # render_scripts <profile> [os]: every install script chezmoi runs for that
 # profile (and OS, default this one), rendered; prints "name<TAB>path" per script.
