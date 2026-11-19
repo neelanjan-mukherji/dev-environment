@@ -1222,7 +1222,7 @@ pwsh_bin() {
 test_windows_tweaks_step_runs_only_on_windows_with_desktop_on() {
     local os
     ! grep -q 'tweaks' <<<"$(rendered_names minimal windows)" || { echo "    tweaks without desktop"; return 1; }
-    grep -q 'desktop-tweaks\.ps1$' <<<"$(DEVENV_ADD=desktop rendered_names minimal windows)" ||
+    grep -q 'windows-tweaks\.ps1$' <<<"$(DEVENV_ADD=desktop rendered_names minimal windows)" ||
         { DEVENV_ADD=desktop rendered_names minimal windows; return 1; }
     for os in linux darwin; do
         ! grep -q 'tweaks\.ps1$' <<<"$(DEVENV_ADD=desktop rendered_names minimal "$os")" || { echo "    ps1 tweaks on $os"; return 1; }
@@ -1236,7 +1236,7 @@ test_windows_tweaks_step_runs_only_on_windows_with_desktop_on() {
 win_tweaks() {
     tw="$1"
     mkdir -p "$tw/bin" "$tw/home"
-    tweaks="$(DEVENV_ADD=desktop render_scripts minimal windows | awk -F'\t' '/desktop-tweaks/ {print $2}')"
+    tweaks="$(DEVENV_ADD=desktop render_scripts minimal windows | awk -F'\t' '/windows-tweaks/ {print $2}')"
     [[ -s "$tweaks" ]] || { echo "    no rendered tweak step"; return 1; }
     printf '%s\t%%\t\t\n%s\tCurrentBuildNumber\tREG_SZ\t%s\n' \
         'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion' \
