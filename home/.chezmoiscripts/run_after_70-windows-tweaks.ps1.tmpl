@@ -20,6 +20,8 @@ $tweaks = @(
 
 # Read-Registry <key> <name>: the value as text (a DWORD in decimal), '' for an empty
 # string, $null when the key or value doesn't exist. Name '' = the key's default value.
+# The doctor reads tweaks back with its own copy (readRegistry in cli/internal/doctor/desktop.go;
+# go:embed can't reach home/): change both together.
 function Read-Registry([string]$Key, [string]$Name) {
     $ErrorActionPreference = 'Continue'
     if ($Name) { $which = @('/v', $Name) } else { $which = @('/ve') }
