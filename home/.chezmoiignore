@@ -26,3 +26,16 @@
 .config/powershell
 AppData
 {{ end }}
+{{- /* desktop: VS Code's user settings.json, at each OS's own path, only with desktop on. */}}
+{{ $desktop := includeTemplate "components" . | splitList "," | has "desktop" }}
+{{ if or (ne .chezmoi.os "linux") (not $desktop) }}
+.config/Code
+{{ end }}
+{{ if ne .chezmoi.os "darwin" }}
+Library
+{{ else if not $desktop }}
+Library/Application Support/Code
+{{ end }}
+{{ if not $desktop }}
+AppData/Roaming/Code
+{{ end }}
