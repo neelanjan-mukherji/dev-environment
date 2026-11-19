@@ -1,0 +1,30 @@
+{{- $on := includeTemplate "components" . | splitList "," -}}
+{{- if has "desktop" $on -}}
+{{- $extensions := .desktop.extensions.shared -}}
+#!/usr/bin/env bash
+# Re-runs when the extension list changes: {{ $extensions | toJson | sha256sum }}
+# After the VS Code install steps. Only adds: extensions installed by hand stay.
+set -Eeuo pipefail
+{{ template "lib.sh" . }}
+
+step "VS Code extensions"
+{{- if eq .chezmoi.os "linux" }}
+if is_wsl; then
+    record_skip "vscode extensions: inside WSL, code is the Windows host's (its own setup installs them)"
+    exit 0
+fi
+{{- else if eq .chezmoi.os "darwin" }}
+find_brew || true   # the cask links code into Homebrew's bin
+{{- end }}
+if ! command -v code >/dev/null 2>&1; then
+    record_skip "vscode extensions: code is not on PATH"
+    exit 0
+fi
+
+extensions=({{ range $extensions }} {{ . | quote }}{{ end }})
+installed="$(code --list-extensions)"
+for id in "${extensions[@]}"; do
+    # IDs are case-insensitive; the list prints the Marketplace's casing.
+    grep -qixF "$id" <<<"$installed" || run code --install-extension "$id"
+done
+{{- end }}
