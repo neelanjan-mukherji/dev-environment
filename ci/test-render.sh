@@ -827,10 +827,11 @@ test_linux_vscode_step_only_renders_with_desktop_on_linux() {
     names="$(rendered_names full linux)"
     ! grep -q vscode <<<"$names" || { echo "    rendered without desktop:"; echo "$names"; return 1; }
     names="$(DEVENV_ADD=desktop rendered_names minimal linux)"
-    grep -qx 'run_onchange_after_35-vscode.sh' <<<"$names" || { echo "    missing with desktop:"; echo "$names"; return 1; }
+    # run_after_: runs on every apply, so a skipped install is retried.
+    grep -qx 'run_after_35-vscode.sh' <<<"$names" || { echo "    missing with desktop:"; echo "$names"; return 1; }
     for os in darwin windows; do
         names="$(DEVENV_ADD=desktop rendered_names minimal "$os")"
-        ! grep -qx 'run_onchange_after_35-vscode.sh' <<<"$names" || { echo "    rendered on $os"; return 1; }
+        ! grep -qx 'run_after_35-vscode.sh' <<<"$names" || { echo "    rendered on $os"; return 1; }
     done
 }
 
@@ -892,6 +893,36 @@ echo 1.106.0
     out="$(vscode_linux_run hand "$bin:$path" "$linux_kernel" DEVENV_YES=1)" || { echo "$out"; return 1; }
     [[ ! -s "$work/distro-dnf/log" ]] || { echo "    reinstalled:"; cat "$work/distro-dnf/log"; return 1; }
     [[ -z "$(vscode_skipped hand)" ]] || { echo "    recorded a skip: $(vscode_skipped hand)"; return 1; }
+    # Quiet, as the step runs on every apply (the second-install no-op check).
+    [[ -z "$out" ]] || { echo "    not quiet:"; echo "$out"; return 1; }
+}
+
+test_linux_vscode_step_reports_a_skip_once_and_retries_it() {
+    local out path root="$work/vscode-retry"
+    path="$(fake_distro dnf)"
+    mkdir -p "$root/bin" "$root/home"
+    # Microsoft's repository setup goes to fakes, never the real /etc/yum.repos.d.
+    printf '#!/bin/sh\necho "rpm $*" >>"%s"\n' "$work/distro-dnf/log" >"$root/bin/rpm"
+    printf '#!/bin/sh\ncat >>"$HOME/tee.log"\n' >"$root/bin/tee"
+    chmod +x "$root/bin/rpm" "$root/bin/tee"
+    # No sudo: skipped and said once, then quiet while it stays impossible.
+    out="$(vscode_linux_run retry "$root/bin:$path" "$linux_kernel" DEVENV_YES=1 DEVENV_NO_SUDO=1)" || { echo "$out"; return 1; }
+    grep -q 'VS Code' <<<"$out" || { echo "$out"; return 1; }
+    out="$(vscode_linux_run retry "$root/bin:$path" "$linux_kernel" DEVENV_YES=1 DEVENV_NO_SUDO=1)" || { echo "$out"; return 1; }
+    [[ -z "$out" ]] || { echo "    not quiet the second time:"; echo "$out"; return 1; }
+    [[ "$(vscode_skipped retry | grep -c '^vscode')" = 1 ]] || { vscode_skipped retry; return 1; }
+    # Once sudo is there, the next apply installs it.
+    out="$(vscode_linux_run retry "$root/bin:$path" "$linux_kernel" DEVENV_YES=1)" || { echo "$out"; return 1; }
+    grep -qx 'dnf install -y -q code' "$work/distro-dnf/log" || { echo "$out"; cat "$work/distro-dnf/log"; return 1; }
+}
+
+test_linux_vscode_step_is_quiet_once_declined() {
+    local out root="$work/vscode-declined"
+    mkdir -p "$root/state/dev"
+    : >"$root/state/dev/vscode.declined"
+    out="$(vscode_linux_run declined "$(fake_distro dnf)" "$linux_kernel" DEVENV_YES=1)" || { echo "$out"; return 1; }
+    [[ -z "$out" && -z "$(vscode_skipped declined)" ]] || { echo "    not quiet:"; echo "$out"; return 1; }
+    ! grep -qvx 'sudo true' "$work/distro-dnf/log" || { echo "    ran:"; cat "$work/distro-dnf/log"; return 1; }
 }
 
 test_linux_vscode_repository_is_only_added_after_asking() {
