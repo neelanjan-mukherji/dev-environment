@@ -65,7 +65,8 @@ can_sudo() {
     have_tty && sudo -v </dev/tty
 }
 
-is_wsl() { grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; }
+# DEVENV_OSRELEASE stands in for the kernel release file (tests fake WSL with it).
+is_wsl() { grep -qi microsoft "${DEVENV_OSRELEASE:-/proc/sys/kernel/osrelease}" 2>/dev/null; }
 
 # login_shell [user]: the user's login shell (getent on Linux, Directory Services on macOS).
 login_shell() {
