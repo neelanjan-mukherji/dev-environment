@@ -363,8 +363,9 @@ test_btop_keeps_its_own_settings_and_only_the_theme_line_is_managed() {
 # profile (and OS, default this one), rendered; prints "name<TAB>path" per script.
 render_scripts() {
     local profile="$1" os="${2:-}"
-    # Its own config per added component, so `DEVENV_ADD=x render_scripts ...` doesn't carry over.
-    local root="$work/scripts-$profile-${os:-here}${DEVENV_ADD:+-add-${DEVENV_ADD// /}}" f out
+    # DEVENV_ADD in the caller's env gets its own config (re-init would carry it over).
+    local add="${DEVENV_ADD:-}"; add="${add// /}"
+    local root="$work/scripts-$profile-${os:-here}${add:+-$add}" f out
     local override=()
     [[ -n "$os" ]] && override=(--override-data "{\"chezmoi\":{\"os\":\"$os\"}}")
     mkdir -p "$root/out"
@@ -1095,6 +1096,188 @@ test_bootstrap_refuses_a_release_whose_checksum_does_not_match() {
     ! out="$(env HOME="$root/home" DEVENV_RELEASE_URL="file://$root/release" sh "$repo/install.sh" --yes 2>&1)" || { echo "$out"; return 1; }
     grep -q "Checksum mismatch" <<<"$out" || { echo "$out"; return 1; }
     [[ ! -e "$root/home/.local/bin/dev" ]]
+}
+
+# ---- Desktop: VS Code install on macOS and Windows (#3)
+# IDs from Homebrew (formulae.brew.sh/cask/visual-studio-code) and winget-pkgs
+# (manifests/m/Microsoft/VisualStudioCode), not from our data files.
+
+# vscode_scripts <tag> <os> [VAR=value...]: the install scripts chezmoi runs on <os>
+# for a minimal machine with those overrides, as "name<TAB>rendered path".
+vscode_scripts() {
+    local root="$work/vscode-$1" os="$2"; shift 2
+    rm -rf "$root"
+    init_config "$root" "$@"
+    local f out
+    for f in $("$CHEZMOI" managed --source "$repo" --config "$root/chezmoi.toml" --cache "$root/cache" \
+        --persistent-state "$root/state.boltdb" --destination "$root/home" --include scripts \
+        --path-style source-relative --override-data "{\"chezmoi\":{\"os\":\"$os\"}}"); do
+        out="$root/$(basename "$f" .tmpl)"
+        "$CHEZMOI" execute-template --source "$repo" --config "$root/chezmoi.toml" --cache "$root/cache" \
+            --persistent-state "$root/state.boltdb" --override-data "{\"chezmoi\":{\"os\":\"$os\"}}" \
+            <"$repo/home/$f" >"$out"
+        printf '%s\t%s\n' "$(basename "$out")" "$out"
+    done
+}
+
+# vscode_mentions <tag> <os> <id> [VAR=value...]: the scripts on <os> that name <id>.
+vscode_mentions() {
+    local tag="$1" os="$2" id="$3" name out; shift 3
+    while IFS=$'\t' read -r name out; do
+        if grep -qF -- "$id" "$out"; then echo "$name"; fi
+    done < <(vscode_scripts "$tag" "$os" "$@")
+}
+
+test_vscode_is_installed_only_with_desktop_on_and_only_by_its_own_os() {
+    local os got
+    for os in linux darwin windows; do
+        got="$(vscode_mentions "off-$os" "$os" visual-studio-code)$(vscode_mentions "off-$os" "$os" Microsoft.VisualStudioCode)"
+        [[ -z "$got" ]] || { echo "    $os without desktop installs VS Code in: $got"; return 1; }
+    done
+    got="$(vscode_mentions on-darwin darwin visual-studio-code DEVENV_ADD=desktop)"
+    [[ "$got" == *system-packages-darwin.sh ]] || { echo "    darwin cask in: '$got'"; return 1; }
+    got="$(vscode_mentions on-windows windows Microsoft.VisualStudioCode DEVENV_ADD=desktop)"
+    [[ "$got" == *winget-packages.ps1 ]] || { echo "    windows winget in: '$got'"; return 1; }
+    # Neither OS gets the other's package.
+    [[ -z "$(vscode_mentions on-darwin darwin Microsoft.VisualStudioCode DEVENV_ADD=desktop)" ]]
+    [[ -z "$(vscode_mentions on-windows windows visual-studio-code DEVENV_ADD=desktop)" ]]
+    [[ -z "$(vscode_mentions on-linux linux visual-studio-code DEVENV_ADD=desktop)$(vscode_mentions on-linux linux Microsoft.VisualStudioCode DEVENV_ADD=desktop)" ]]
+    shellcheck -s bash "$work/vscode-on-darwin/run_before_11-system-packages-darwin.sh"
+}
+
+test_vscode_cask_is_installed_on_macos_unless_vscode_is_already_there() {
+    local root="$work/vscode-cask" script sys out
+    script="$(vscode_scripts cask-run darwin DEVENV_ADD=desktop | awk -F'\t' '/system-packages-darwin/ {print $2}')"
+    sys="$(system_without brew code)"
+    mkdir -p "$root/bin"
+    # A Homebrew with every formula and the other casks installed; installs are logged.
+    cat >"$root/bin/brew" <<SH
+#!/bin/sh
+case "\$1" in
+    shellenv) ;;
+    list) [ "\$2" = --cask ] && printf 'font-jetbrains-mono-nerd-font\nwezterm\n' || printf 'bash\ngit\ngnupg\ntmux\ntree\nxz\n' ;;
+    *) echo "brew \$*" >>"$root/log" ;;
+esac
+SH
+    chmod +x "$root/bin/brew"
+    mac() { env -i HOME="$root/home" PATH="$root/bin:$sys" XDG_STATE_HOME="$root/state" bash "$script" 2>&1; }
+    mkdir -p "$root/home"; : >"$root/log"
+    out="$(mac)" || { echo "$out"; return 1; }
+    grep -qx 'brew install --cask visual-studio-code' "$root/log" || { echo "$out"; cat "$root/log"; return 1; }
+    # A VS Code installed by hand, as an app or a `code` on PATH, is left alone (and quiet).
+    : >"$root/log"; mkdir -p "$root/home/Applications/Visual Studio Code.app"
+    out="$(mac)"; [[ -z "$out" && ! -s "$root/log" ]] || { echo "$out"; cat "$root/log"; return 1; }
+    rm -rf "$root/home/Applications"
+    printf '#!/bin/sh\n' >"$root/bin/code"; chmod +x "$root/bin/code"
+    out="$(mac)"; [[ -z "$out" && ! -s "$root/log" ]] || { echo "$out"; cat "$root/log"; return 1; }
+}
+
+test_vscode_is_installed_with_winget_for_the_user_unless_code_is_there() {
+    if ! command -v pwsh >/dev/null 2>&1; then
+        echo "    (pwsh not installed: not run; CI runs it)" >&2
+        return 0
+    fi
+    local root="$work/vscode-winget" script out
+    script="$(vscode_scripts winget-run windows DEVENV_ADD=desktop | awk -F'\t' '/winget-packages/ {print $2}')"
+    mkdir -p "$root/bin" "$root/home"
+    # winget has everything but VS Code; calls are logged.
+    cat >"$root/bin/winget" <<SH
+#!/bin/sh
+echo "winget \$*" >>"$root/log"
+case "\$1 \$*" in list*Microsoft.VisualStudioCode*) exit 1 ;; esac
+exit 0
+SH
+    chmod +x "$root/bin/winget"
+    win() { env HOME="$root/home" PATH="$root/bin:$PATH" DEVENV_YES=1 pwsh -NoLogo -NoProfile -File "$script" 2>&1 </dev/null; }
+    : >"$root/log"
+    out="$(win)" || { echo "$out"; return 1; }
+    # User scope: no UAC prompt, no administrator rights.
+    grep -q '^winget install --id Microsoft.VisualStudioCode --exact --source winget .*--scope user' "$root/log" ||
+        { echo "$out"; cat "$root/log"; return 1; }
+    # A `code` already on PATH is left alone.
+    : >"$root/log"; printf '#!/bin/sh\n' >"$root/bin/code"; chmod +x "$root/bin/code"
+    out="$(win)" || { echo "$out"; return 1; }
+    ! grep -q 'Microsoft.VisualStudioCode' "$root/log" || { echo "$out"; cat "$root/log"; return 1; }
+}
+
+# ---- Desktop: VS Code extensions
+# Expected IDs are the Marketplace's (Catppuccin's and Microsoft's published
+# item names), compared case-insensitively as VS Code does.
+
+# vscode_extensions_script <os>: the rendered extensions step with desktop on.
+vscode_extensions_script() {
+    DEVENV_ADD=desktop render_scripts minimal "$1" | awk -F'\t' '/vscode-extensions/ {print $2}'
+}
+
+test_vscode_extensions_step_is_there_only_with_desktop() {
+    local os
+    for os in linux darwin windows; do
+        ! grep -q vscode-extensions <<<"$(rendered_names full "$os")" || { echo "    $os: without desktop"; return 1; }
+        grep -q vscode-extensions <<<"$(DEVENV_ADD=desktop rendered_names minimal "$os")" || { echo "    $os: missing with desktop"; return 1; }
+    done
+}
+
+test_vscode_extensions_step_lists_the_shared_ids_and_wsl_only_on_windows() {
+    local os f id
+    for os in linux darwin windows; do
+        f="$(vscode_extensions_script "$os")"
+        [[ -s "$f" ]] || { echo "    $os: not rendered"; return 1; }
+        for id in Catppuccin.catppuccin-vsc Catppuccin.catppuccin-vsc-icons EditorConfig.EditorConfig ms-vscode-remote.remote-containers; do
+            grep -qiF "$id" "$f" || { echo "    $os: no $id"; return 1; }
+        done
+        if [[ $os == windows ]]; then
+            grep -qiF ms-vscode-remote.remote-wsl "$f" || { echo "    windows: no WSL extension"; return 1; }
+        else
+            ! grep -qiF ms-vscode-remote.remote-wsl "$f" || { echo "    $os: has the WSL extension"; return 1; }
+            shellcheck -s bash "$f" || { echo "    $os: shellcheck"; return 1; }
+        fi
+    done
+}
+
+# vscode_run <root> <osrelease> [PATH]: run the Linux extensions step (rendered to
+# <root>/script.sh) with the fake code in <root>/bin; prints its output.
+vscode_run() {
+    local root="$1"
+    printf '%s\n' "$2" >"$root/osrelease"
+    env -i HOME="$root/home" PATH="${3:-$root/bin:$(system_without code)}" XDG_STATE_HOME="$root/state" \
+        DEVENV_OSRELEASE="$root/osrelease" bash "$root/script.sh" 2>&1
+}
+
+test_vscode_extensions_step_adds_only_missing_ids_and_never_uninstalls() {
+    local root="$work/vscode-ext" out
+    init_config "$root" DEVENV_ADD=desktop
+    cp "$(render_script "$root" 56-vscode-extensions)" "$root/script.sh"
+    mkdir -p "$root/bin" "$root/home"
+    # Already installed (in the Marketplace's casing), plus one of the person's own.
+    cat >"$root/bin/code" <<SH
+#!/bin/sh
+echo "code \$*" >>"$root/code.log"
+[ "\$1" = --list-extensions ] && printf 'Catppuccin.catppuccin-vsc\nsomeone.their-own\n'
+exit 0
+SH
+    chmod +x "$root/bin/code"
+    out="$(vscode_run "$root" 6.8.0-generic)" || { echo "$out"; return 1; }
+    grep -qix 'code --install-extension editorconfig.editorconfig' "$root/code.log" || { cat "$root/code.log"; return 1; }
+    grep -qix 'code --install-extension ms-vscode-remote.remote-containers' "$root/code.log"
+    ! grep -qix 'code --install-extension catppuccin.catppuccin-vsc' "$root/code.log" || { echo "    reinstalled an installed one"; return 1; }
+    ! grep -q 'uninstall' "$root/code.log" || { echo "    uninstalled something"; return 1; }
+    ! grep -qi 'remote-wsl' "$root/code.log" || { echo "    WSL extension on Linux"; return 1; }
+    grep -qF '$ code --install-extension' <<<"$out" || { echo "    commands not shown:"; echo "$out"; return 1; }
+}
+
+test_vscode_extensions_step_skips_inside_wsl_and_without_code() {
+    local root="$work/vscode-skip" out
+    init_config "$root" DEVENV_ADD=desktop
+    cp "$(render_script "$root" 56-vscode-extensions)" "$root/script.sh"
+    mkdir -p "$root/bin" "$root/home"
+    printf '#!/bin/sh\necho "code $*" >>"%s/code.log"\n' "$root" >"$root/bin/code"; chmod +x "$root/bin/code"
+    # Inside WSL, code is the Windows host's: the host's own step installs them.
+    out="$(vscode_run "$root" 6.6.87.2-microsoft-standard-WSL2)" || { echo "$out"; return 1; }
+    [[ ! -e "$root/code.log" ]] || { echo "    ran the host's code:"; cat "$root/code.log"; return 1; }
+    grep -qi 'vscode extensions.*wsl' "$root/state/dev/skipped.log" || { cat "$root/state/dev/skipped.log"; return 1; }
+    # No code on PATH: a skip with the reason, not a failure.
+    out="$(vscode_run "$root" 6.8.0-generic "$(system_without code)")" || { echo "$out"; return 1; }
+    grep -qi 'vscode extensions.*code is not' "$root/state/dev/skipped.log" || { cat "$root/state/dev/skipped.log"; return 1; }
 }
 
 # ---------------------------------------------------------------- run

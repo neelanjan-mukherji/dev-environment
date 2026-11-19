@@ -1,3 +1,4 @@
+{{- $on := includeTemplate "components" . | splitList "," -}}
 # Re-runs when the package list changes: {{ .packages.winget | toJson | sha256sum }}
 {{ template "lib.ps1" . }}
 
@@ -10,9 +11,14 @@ $wanted = @(
 {{- range .packages.winget }}
     @{ Id = {{ .id | squote }}; Version = {{ dig "version" "" . | squote }}; Pin = {{ dig "pin" "" . | squote }} }
 {{- end }}
+{{- if has "desktop" $on }}
+    # desktop: per-user install (no UAC prompt); a `code` already on PATH is left alone.
+    @{ Id = 'Microsoft.VisualStudioCode'; Version = ''; Pin = ''; Scope = 'user'; Command = 'code' }
+{{- end }}
 )
 $missing = @()
 foreach ($p in $wanted) {
+    if ($p.Command -and (Get-Command $p.Command -ErrorAction SilentlyContinue)) { continue }
     if (-not (Test-Native winget list --id $p.Id --exact --accept-source-agreements --disable-interactivity)) { $missing += $p }
 }
 if ($missing.Count -eq 0) {
@@ -24,6 +30,7 @@ if ($missing.Count -eq 0) {
         $install = @('install', '--id', $p.Id, '--exact', '--source', 'winget', '--silent',
             '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity')
         if ($p.Version) { $install += @('--version', $p.Version) }
+        if ($p.Scope) { $install += @('--scope', $p.Scope) }
         Write-Host ("    `$ winget {0}" -f ($install -join ' ')) -ForegroundColor DarkGray
         winget @install
         # Already there under another source (e.g. Windows Terminal from the Store):
