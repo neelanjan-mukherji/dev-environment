@@ -66,8 +66,10 @@ function Confirm-Step([string]$Question) {
 }
 
 # Update-Path: pick up what installers added to PATH (a running process keeps its own).
+# Off Windows (the pwsh render tests) there is no stored PATH, and the current one stays.
 function Update-Path {
-    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+    $fresh = @([Environment]::GetEnvironmentVariable('Path', 'Machine'), [Environment]::GetEnvironmentVariable('Path', 'User')) | Where-Object { $_ }
+    if ($fresh) { $env:Path = $fresh -join ';' }
 }
 
 trap {

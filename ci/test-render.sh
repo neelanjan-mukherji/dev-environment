@@ -1640,6 +1640,62 @@ test_vscode_extensions_step_skips_inside_wsl_and_without_code() {
     grep -qi 'vscode extensions.*code is not' "$root/state/dev/skipped.log" || { cat "$root/state/dev/skipped.log"; return 1; }
 }
 
+# fake_code <dir>: a `code` in <dir>/bin whose extensions live in <dir>/installed.
+fake_code() {
+    mkdir -p "$1/bin"; : >"$1/installed"
+    cat >"$1/bin/code" <<SH
+#!/bin/sh
+case "\$1" in
+    --list-extensions) cat "$1/installed" ;;
+    --install-extension) echo "\$2" >>"$1/installed" ;;
+esac
+SH
+    chmod +x "$1/bin/code"
+}
+
+test_vscode_extensions_step_is_retried_once_code_is_there_then_quiet() {
+    local root="$work/vscode-ext-retry" out
+    # run_after_: runs on every apply, so extensions follow a later VS Code install.
+    grep -qx 'run_after_56-vscode-extensions.sh' <<<"$(DEVENV_ADD=desktop rendered_names minimal linux)" ||
+        { echo "    not a run_after_ step"; return 1; }
+    init_config "$root" DEVENV_ADD=desktop
+    cp "$(render_script "$root" 56-vscode-extensions)" "$root/script.sh"
+    mkdir -p "$root/home"
+    # No code yet: said once, then quiet (the second-install no-op check).
+    out="$(vscode_run "$root" "$linux_kernel" "$(system_without code)")" || { echo "$out"; return 1; }
+    grep -q 'VS Code extensions' <<<"$out" || { echo "$out"; return 1; }
+    out="$(vscode_run "$root" "$linux_kernel" "$(system_without code)")" || { echo "$out"; return 1; }
+    [[ -z "$out" ]] || { echo "    not quiet without code:"; echo "$out"; return 1; }
+    [[ "$(grep -c 'vscode extensions' "$root/state/dev/skipped.log")" = 1 ]] || { cat "$root/state/dev/skipped.log"; return 1; }
+    # code shows up (installed by hand, or by a later run): the extensions follow.
+    fake_code "$root"
+    out="$(vscode_run "$root" "$linux_kernel")" || { echo "$out"; return 1; }
+    grep -qix 'editorconfig.editorconfig' "$root/installed" || { echo "$out"; cat "$root/installed"; return 1; }
+    # All there: quiet.
+    out="$(vscode_run "$root" "$linux_kernel")" || { echo "$out"; return 1; }
+    [[ -z "$out" ]] || { echo "    not quiet once installed:"; echo "$out"; return 1; }
+}
+
+test_windows_vscode_extensions_step_is_retried_once_code_is_there_then_quiet() {
+    command -v pwsh >/dev/null 2>&1 || { echo "    (pwsh not installed: not run; CI runs it)" >&2; return 0; }
+    local root="$work/vscode-ext-win" script out
+    grep -qx 'run_after_56-vscode-extensions.ps1' <<<"$(DEVENV_ADD=desktop rendered_names minimal windows)" ||
+        { echo "    not a run_after_ step"; return 1; }
+    script="$(vscode_extensions_script windows)"
+    mkdir -p "$root/home" "$root/nocode"
+    # Only pwsh (and later the fake code): never a host's own code.
+    win() { env HOME="$root/home" PATH="$1:$(system_without code):$(pwsh_bin)" DEVENV_YES=1 pwsh -NoLogo -NoProfile -File "$script" 2>&1 </dev/null; }
+    out="$(win "$root/nocode")" || { echo "$out"; return 1; }
+    grep -q 'VS Code extensions' <<<"$out" || { echo "$out"; return 1; }
+    out="$(win "$root/nocode")" || { echo "$out"; return 1; }
+    [[ -z "$out" ]] || { echo "    not quiet without code:"; echo "$out"; return 1; }
+    fake_code "$root"
+    out="$(win "$root/bin")" || { echo "$out"; return 1; }
+    grep -qix 'ms-vscode-remote.remote-wsl' "$root/installed" || { echo "$out"; cat "$root/installed"; return 1; }
+    out="$(win "$root/bin")" || { echo "$out"; return 1; }
+    [[ -z "$out" ]] || { echo "    not quiet once installed:"; echo "$out"; return 1; }
+}
+
 # ---------------------------------------------------------------- run
 
 for fn in $(declare -F | awk '{print $3}' | grep '^test_'); do t "${fn#test_}" "$fn"; done
