@@ -1,0 +1,81 @@
+# The desktop component's data (off in every profile; `dev add desktop`).
+# Adding an extension or a tweak here is a one-line change that re-runs its step.
+desktop:
+  # VS Code Marketplace IDs, lower-case as `code --list-extensions` prints them.
+  # Installed if missing, never uninstalled.
+  extensions:
+    # Every OS.
+    shared:
+      - catppuccin.catppuccin-vsc        # theme; the flavor is set in settings.json
+      - catppuccin.catppuccin-vsc-icons
+      - editorconfig.editorconfig
+      - ms-vscode-remote.remote-containers
+    # On top of the shared list, on the Windows host only.
+    windows:
+      - ms-vscode-remote.remote-wsl      # `code .` inside WSL opens in the host's VS Code
+
+  # OS preferences, each offered on its own (asked first, declines remembered under
+  # ~/.local/state/dev/ by id). Per-user only: no sudo, no administrator rights.
+  #   id           unique per OS, file-name safe (names the declined marker)
+  #   description  one line, shown when asking
+  #   command      the exact command shown and run (sh on macOS, PowerShell on Windows)
+  #   reads        how to tell it is applied: every entry must read back as `value`
+  #                macOS: `defaults read <domain> <key>` ($HOME in value is expanded)
+  #                Windows: value `name` under registry `key` ("" = the key's default value)
+  #   restart      process to restart (after asking) for it to take effect; "" = none
+  #   min_build    Windows only: lowest OS build it applies to (0 = any)
+  tweaks:
+    darwin:
+      - id: show-file-extensions
+        description: Finder shows every file name extension
+        command: defaults write NSGlobalDomain AppleShowAllExtensions -bool true
+        reads:
+          - {domain: NSGlobalDomain, key: AppleShowAllExtensions, value: "1"}
+        restart: Finder
+      - id: show-hidden-files
+        description: Finder shows hidden files
+        command: defaults write com.apple.finder AppleShowAllFiles -bool true
+        reads:
+          - {domain: com.apple.finder, key: AppleShowAllFiles, value: "1"}
+        restart: Finder
+      - id: finder-path-bar
+        description: Finder shows the path bar
+        command: defaults write com.apple.finder ShowPathbar -bool true
+        reads:
+          - {domain: com.apple.finder, key: ShowPathbar, value: "1"}
+        restart: Finder
+      - id: fast-key-repeat
+        description: Fast key repeat with a short delay (apps started afterwards)
+        command: defaults write NSGlobalDomain KeyRepeat -int 2 && defaults write NSGlobalDomain InitialKeyRepeat -int 15
+        reads:
+          - {domain: NSGlobalDomain, key: KeyRepeat, value: "2"}
+          - {domain: NSGlobalDomain, key: InitialKeyRepeat, value: "15"}
+        restart: ""
+      - id: screenshots-folder
+        description: Screenshots are saved to ~/Pictures/Screenshots
+        command: mkdir -p "$HOME/Pictures/Screenshots" && defaults write com.apple.screencapture location -string "$HOME/Pictures/Screenshots"
+        reads:
+          - {domain: com.apple.screencapture, key: location, value: $HOME/Pictures/Screenshots}
+        restart: SystemUIServer
+    windows:
+      - id: show-file-extensions
+        description: Explorer shows every file name extension
+        command: reg.exe add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v HideFileExt /t REG_DWORD /d 0 /f
+        reads:
+          - {key: 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', name: HideFileExt, value: "0"}
+        restart: Explorer
+        min_build: 0
+      - id: show-hidden-files
+        description: Explorer shows hidden files
+        command: reg.exe add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Hidden /t REG_DWORD /d 1 /f
+        reads:
+          - {key: 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', name: Hidden, value: "1"}
+        restart: Explorer
+        min_build: 0
+      - id: classic-context-menu
+        description: Windows 11 right-click menu shows every entry (the classic menu)
+        command: reg.exe add "HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" /f /ve
+        reads:
+          - {key: 'HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32', name: "", value: ""}
+        restart: Explorer
+        min_build: 22000

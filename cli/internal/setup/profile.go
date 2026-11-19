@@ -13,7 +13,7 @@ import (
 
 // KnownComponents can be added to or removed from any profile
 // (the same list as $known in home/.chezmoi.toml.tmpl).
-var KnownComponents = []string{"docker", "devtools", "node", "python", "go", "rust", "kubernetes", "java", "cloud"}
+var KnownComponents = []string{"docker", "devtools", "node", "python", "go", "rust", "kubernetes", "java", "cloud", "desktop"}
 
 // selection is this machine's profile and component overrides.
 type selection struct {
@@ -151,7 +151,15 @@ func Change(ctx context.Context, co ChangeOptions, d Deps) error {
 	}
 	r.opts = Options{Source: s.repo, Profile: profile, Add: add, Remove: remove, Yes: co.Yes, setComponents: true}
 	r.reconfigure = true
-	return r.steps(ctx, r.configure, r.review, r.applyAndSummarise)
+	if err := r.steps(ctx, r.configure, r.review, r.applyAndSummarise); err != nil {
+		return err
+	}
+	if slices.Contains(removeComponents, "desktop") {
+		// Removing desktop only stops managing it: dev never uninstalls an app or reverts a preference.
+		r.ui.info("desktop is no longer managed here; nothing was uninstalled or reverted " +
+			"(VS Code, its extensions, settings and the OS tweaks stay as they are).")
+	}
+	return nil
 }
 
 // splitComponents separates known components from mise tool names.

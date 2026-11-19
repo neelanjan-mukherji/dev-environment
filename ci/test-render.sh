@@ -118,6 +118,84 @@ test_config_dir_is_not_readable_by_other_users() {
     [[ $mode == 700 ]] || { echo "    ~/.config mode is $mode"; return 1; }
 }
 
+test_desktop_is_in_no_profile_unless_added() {
+    local root="$work/desktop-gating" p on
+    for p in minimal dev full; do
+        init_config "$root/$p" DEVENV_PROFILE="$p"
+        on="$("$CHEZMOI" execute-template --source "$repo" --config "$root/$p/chezmoi.toml" \
+            --cache "$root/$p/cache" --persistent-state "$root/$p/state.boltdb" '{{ includeTemplate "components" . }}')"
+        [[ ",$on," != *,desktop,* ]] || { echo "    $p: $on"; return 1; }
+    done
+    init_config "$root/added" DEVENV_PROFILE=minimal DEVENV_ADD=desktop
+    on="$("$CHEZMOI" execute-template --source "$repo" --config "$root/added/chezmoi.toml" \
+        --cache "$root/added/cache" --persistent-state "$root/added/state.boltdb" '{{ includeTemplate "components" . }}')"
+    # No requirements: adding desktop to minimal brings nothing else.
+    [[ "$on" == desktop ]] || { echo "    minimal + desktop: $on"; return 1; }
+}
+
+# desktop_data '<template>': render a template against the desktop data.
+desktop_data() {
+    local root="$work/desktop-data"
+    [[ -f "$root/chezmoi.toml" ]] || init_config "$root"
+    "$CHEZMOI" execute-template --source "$repo" --config "$root/chezmoi.toml" \
+        --cache "$root/cache" --persistent-state "$root/state.boltdb" "$1"
+}
+
+test_desktop_data_lists_shared_and_windows_only_extensions() {
+    local shared windows
+    shared="$(desktop_data '{{ range .desktop.extensions.shared }}{{ . }}{{ "\n" }}{{ end }}')"
+    windows="$(desktop_data '{{ range .desktop.extensions.windows }}{{ . }}{{ "\n" }}{{ end }}')"
+    # Marketplace IDs as published by Catppuccin and Microsoft.
+    grep -qx 'catppuccin.catppuccin-vsc' <<<"$shared" || { echo "    shared: $shared"; return 1; }
+    grep -qx 'ms-vscode-remote.remote-wsl' <<<"$windows" || { echo "    windows: $windows"; return 1; }
+    ! grep -qx 'ms-vscode-remote.remote-wsl' <<<"$shared" || { echo "    WSL extension in the shared list"; return 1; }
+    # Lower-case publisher.name, as `code --list-extensions` prints them (the doctor compares).
+    ! grep -v '^[a-z0-9-]*\.[a-z0-9-]*$' <<<"$shared"$'\n'"$windows" || { echo "    bad ID"; return 1; }
+}
+
+test_desktop_data_has_the_reviewed_macos_tweaks() {
+    local out
+    out="$(desktop_data '{{ range .desktop.tweaks.darwin }}{{ .id }}|{{ .restart }}|{{ .command }}|{{ range .reads }}{{ .domain }} {{ .key }}={{ .value }};{{ end }}{{ "\n" }}{{ end }}')"
+    # Keys as documented by Apple (defaults domains of Finder, the global domain and screencapture).
+    local want
+    for want in \
+        'defaults write NSGlobalDomain AppleShowAllExtensions -bool true|NSGlobalDomain AppleShowAllExtensions=1;' \
+        '|Finder|defaults write com.apple.finder AppleShowAllFiles -bool true|com.apple.finder AppleShowAllFiles=1;' \
+        '|Finder|defaults write com.apple.finder ShowPathbar -bool true|com.apple.finder ShowPathbar=1;' \
+        'NSGlobalDomain KeyRepeat=2;NSGlobalDomain InitialKeyRepeat=15;' \
+        '|SystemUIServer|mkdir -p "$HOME/Pictures/Screenshots" && defaults write com.apple.screencapture location -string "$HOME/Pictures/Screenshots"|com.apple.screencapture location=$HOME/Pictures/Screenshots;'; do
+        grep -qF -- "$want" <<<"$out" || { echo "    no tweak with: $want"; echo "$out"; return 1; }
+    done
+    [[ $(wc -l <<<"$out") == 5 ]] || { echo "$out"; return 1; }
+    # Every tweak is per-user: no sudo.
+    ! grep -q sudo <<<"$out"
+}
+
+test_desktop_data_has_the_reviewed_windows_tweaks() {
+    local out
+    out="$(desktop_data '{{ range .desktop.tweaks.windows }}{{ .id }}|{{ .restart }}|{{ .command }}|{{ range .reads }}{{ .key }}!{{ .name }}={{ .value }};{{ end }}|{{ .min_build }}{{ "\n" }}{{ end }}')"
+    # Explorer's per-user settings (HKCU only: no administrator rights).
+    local adv='HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' menu='HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32' want
+    for want in \
+        "|Explorer|reg.exe add \"$adv\" /v HideFileExt /t REG_DWORD /d 0 /f|$adv!HideFileExt=0;|" \
+        "|Explorer|reg.exe add \"$adv\" /v Hidden /t REG_DWORD /d 1 /f|$adv!Hidden=1;|" \
+        "|Explorer|reg.exe add \"$menu\" /f /ve|$menu!=;|22000"; do
+        grep -qF -- "$want" <<<"$out" || { echo "    no tweak with: $want"; echo "$out"; return 1; }
+    done
+    [[ $(wc -l <<<"$out") == 3 ]] || { echo "$out"; return 1; }
+    ! grep -q 'HKLM' <<<"$out"
+}
+
+test_desktop_tweak_ids_are_unique_and_described() {
+    local ids
+    ids="$(desktop_data '{{ range concat .desktop.tweaks.darwin .desktop.tweaks.windows }}{{ .id }}{{ if not .description }} UNDESCRIBED{{ end }}{{ "\n" }}{{ end }}')"
+    ! grep -q UNDESCRIBED <<<"$ids" || { echo "$ids"; return 1; }
+    # IDs name the declined markers in ~/.local/state/dev/: unique per OS and file-name safe.
+    ! grep -v '^[a-z0-9-]*$' <<<"$ids" || { echo "$ids"; return 1; }
+    [[ -z "$(desktop_data '{{ range .desktop.tweaks.darwin }}{{ .id }}{{ "\n" }}{{ end }}' | sort | uniq -d)" ]]
+    [[ -z "$(desktop_data '{{ range .desktop.tweaks.windows }}{{ .id }}{{ "\n" }}{{ end }}' | sort | uniq -d)" ]]
+}
+
 test_unknown_component_is_rejected() {
     ! render bad-component dev DEVENV_ADD=nope 2>&1
 }

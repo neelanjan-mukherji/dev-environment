@@ -56,7 +56,7 @@
 {{- $flavor := env "DEVENV_THEME" | default (dig "theme" "flavor" "" .) -}}
 {{- if and $flavor (not (has $flavor $flavors)) }}{{ fail (printf "unknown theme flavor %q (known: %s)" $flavor (join ", " $flavors)) }}{{ end -}}
 
-{{- $known := list "docker" "devtools" "node" "python" "go" "rust" "kubernetes" "java" "cloud" -}}
+{{- $known := list "docker" "devtools" "node" "python" "go" "rust" "kubernetes" "java" "cloud" "desktop" -}}
 {{- $add := dig "components" "add" (list) . -}}
 {{- $remove := dig "components" "remove" (list) . -}}
 {{- /* A single space means "none" (dev remove empties a list that way). */ -}}

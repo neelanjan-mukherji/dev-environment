@@ -47,6 +47,8 @@ func (Terminal) EditSettings(s setup.Settings) (setup.Settings, error) {
 	form := huh.NewForm(huh.NewGroup(
 		huh.NewSelect[string]().Title("Profile").Description("What to install. Components can be adjusted later with `dev profile`.").
 			Options(opts...).Value(&s.Profile),
+		huh.NewMultiSelect[string]().Title("Optional components").Description("In no profile; add them here or later with `dev add`.").
+			Options(huh.NewOptions(setup.OptionalComponents...)...).Value(&s.Optional),
 		huh.NewInput().Title("Git author name").Description("Blank to skip.").Value(&s.Name),
 		huh.NewInput().Title("Git author email").
 			Description("Your GitHub noreply address keeps your real one out of public commits. Blank to skip.").
