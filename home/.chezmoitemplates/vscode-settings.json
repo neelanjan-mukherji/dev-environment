@@ -1,0 +1,21 @@
+{{- /* VS Code's settings.json, used by each OS's modify_settings.json. VS Code rewrites
+       the file itself, so only the repo's keys are set and every other key is kept.
+       The file is JSONC: when it isn't plain JSON (comments, trailing commas) it is
+       left as it is; `dev doctor` reports that the shared keys are missing.
+       chezmoi's jq is built in (gojq), so this needs no jq binary, also on Windows. */ -}}
+{{- $in := .chezmoi.stdin -}}
+{{- $s := dict -}}
+{{- if trim $in -}}
+{{-   $s = index (jq "try fromjson catch null" $in) 0 -}}
+{{- end -}}
+{{- if eq (kindOf $s) "map" -}}
+{{-   $names := dict "latte" "Latte" "frappe" "Frappé" "macchiato" "Macchiato" "mocha" "Mocha" -}}
+{{-   $font := "JetBrainsMono Nerd Font" -}}
+{{-   $_ := set $s "workbench.colorTheme" (printf "Catppuccin %s" (index $names .theme.flavor)) -}}
+{{-   $_ = set $s "editor.fontFamily" $font -}}
+{{-   $_ = set $s "terminal.integrated.fontFamily" $font -}}
+{{-   $_ = set $s "terminal.integrated.fontLigatures.enabled" false -}}
+{{ toPrettyJson "    " $s }}
+{{ else -}}
+{{ $in }}
+{{- end -}}
