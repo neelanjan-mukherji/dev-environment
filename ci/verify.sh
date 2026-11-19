@@ -53,7 +53,7 @@ check "second install succeeds"   test $? -eq 0
 esc=$'\033'
 # shellcheck disable=SC2001  # needs a regex
 second_plain="$(sed "s/${esc}\\[[0-9;]*m//g" <<<"$second")"
-check "second install is a no-op" bash -c '! grep -E "==> (System packages|Homebrew and base packages|CLI tools|Docker Engine|Docker \(Colima\)|Login shell|Theme caches|Retire)" <<<"$1"' _ "$second_plain"
+check "second install is a no-op" bash -c '! grep -E "==> (System packages|Homebrew and base packages|CLI tools|Docker Engine|Docker \(Colima\)|Login shell|macOS tweaks|Theme caches|Retire)" <<<"$1"' _ "$second_plain"
 check "update check runs" bash -c '"$1" update --check && [ -s "${XDG_STATE_HOME:-$HOME/.local/state}/dev/update-check" ]' _ "$dev"
 check "no step failed" test ! -s "${XDG_STATE_HOME:-$HOME/.local/state}/dev/failed.log"
 

@@ -363,7 +363,9 @@ test_btop_keeps_its_own_settings_and_only_the_theme_line_is_managed() {
 # profile (and OS, default this one), rendered; prints "name<TAB>path" per script.
 render_scripts() {
     local profile="$1" os="${2:-}"
-    local root="$work/scripts-$profile-${os:-here}" f out
+    # Its own config per component override: a re-init would carry DEVENV_ADD over.
+    local add="${DEVENV_ADD:-}"; add="${add// /}"
+    local root="$work/scripts-$profile-${os:-here}${add:+-add-$add}" f out
     local override=()
     [[ -n "$os" ]] && override=(--override-data "{\"chezmoi\":{\"os\":\"$os\"}}")
     mkdir -p "$root/out"
@@ -722,6 +724,140 @@ test_login_shell_step_reports_once_when_it_cannot_change_the_shell() {
     first="$(env -i HOME="$root/home" PATH="$can:$bin:$sys" XDG_STATE_HOME="$root/state" DEVENV_YES=1 setsid -w bash "$script" </dev/null 2>&1)" ||
         { echo "    retry failed:"; echo "$first"; return 1; }
     grep -q 'chsh -s .*zsh' "$root/home/chsh.log" || { echo "    not retried once zsh and sudo were there"; return 1; }
+}
+
+# ---- macOS tweaks (desktop component)
+
+test_macos_tweaks_step_is_only_on_macos_with_desktop_on() {
+    local mac linux off
+    mac="$(DEVENV_ADD=desktop rendered_names minimal darwin)"
+    linux="$(DEVENV_ADD=desktop rendered_names minimal linux)"
+    off="$(rendered_names minimal darwin)"
+    printf 'darwin+desktop:\n%s\nlinux+desktop:\n%s\ndarwin:\n%s\n' "$mac" "$linux" "$off"
+    grep -q 'macos-tweaks' <<<"$mac"
+    grep -q 'macos-tweaks' <<<"$linux" && return 1
+    grep -q 'macos-tweaks' <<<"$off" && return 1
+    # The shellcheck test above only sees profiles without desktop, where it is empty.
+    shellcheck -s bash "$(DEVENV_ADD=desktop render_scripts minimal darwin | awk -F'\t' '/macos-tweaks/ {print $2}')"
+}
+
+# macos_tweaks <dir>: the macOS tweaks step rendered for darwin with desktop on, plus
+# fake `defaults` (values in <dir>/home/.defaults/<domain>.<key>) and `killall`
+# (logged to <dir>/killall.log) in <dir>/bin. Prints the script path.
+macos_tweaks() {
+    local root="$1" f bin="$1/bin"
+    init_config "$root" DEVENV_ADD=desktop
+    mkdir -p "$bin" "$root/home/.defaults"
+    f="$(ls "$repo"/home/.chezmoiscripts/*macos-tweaks-darwin.sh.tmpl)"
+    "$CHEZMOI" execute-template --source "$repo" --config "$root/chezmoi.toml" --cache "$root/cache" \
+        --persistent-state "$root/state.boltdb" --override-data '{"chezmoi":{"os":"darwin"}}' <"$f" >"$root/tweaks.sh"
+    cat >"$bin/defaults" <<'SH'
+#!/bin/sh
+# defaults read <domain> <key> | defaults write <domain> <key> -bool|-int|-string <value>
+f="$HOME/.defaults/$2.$3"
+case "$1" in
+    read) [ -f "$f" ] && exec cat "$f"; echo "The domain/default pair of ($2, $3) does not exist" >&2; exit 1 ;;
+    write) case "$4:$5" in -bool:true) v=1 ;; -bool:false) v=0 ;; *) v="$5" ;; esac
+        echo "$v" >"$f"; echo "$2 $3" >>"$HOME/.defaults/writes.log" ;;
+    *) exit 2 ;;
+esac
+SH
+    printf '#!/bin/sh\necho "$*" >>%q\n' "$root/killall.log" >"$bin/killall"
+    chmod +x "$bin/defaults" "$bin/killall"
+    echo "$root/tweaks.sh"
+}
+
+# run_tweaks <dir> <script> [env...]: run it without a terminal; prints its output.
+run_tweaks() {
+    local root="$1" script="$2"; shift 2
+    env -i HOME="$root/home" PATH="$root/bin:$(system_without)" XDG_STATE_HOME="$root/state" "$@" \
+        setsid -w bash "$script" </dev/null 2>&1
+}
+
+# mac_default <dir> <domain> <key>: what `defaults read` would print.
+mac_default() { cat "$1/home/.defaults/$2.$3" 2>/dev/null; }
+
+test_macos_tweaks_apply_apples_defaults_keys_under_yes_then_stay_quiet() {
+    local root="$work/mactweaks-yes" script out
+    script="$(macos_tweaks "$root")"
+    out="$(run_tweaks "$root" "$script" DEVENV_YES=1)" || { echo "$out"; return 1; }
+    echo "$out"
+    # Keys and values from macos-defaults.com (Apple publishes no reference); bools read back as 1.
+    [[ "$(mac_default "$root" NSGlobalDomain AppleShowAllExtensions)" == 1 ]]
+    [[ "$(mac_default "$root" com.apple.finder AppleShowAllFiles)" == 1 ]]
+    [[ "$(mac_default "$root" com.apple.finder ShowPathbar)" == 1 ]]
+    [[ "$(mac_default "$root" NSGlobalDomain KeyRepeat)" == 2 ]]
+    [[ "$(mac_default "$root" NSGlobalDomain InitialKeyRepeat)" == 15 ]]
+    [[ "$(mac_default "$root" com.apple.screencapture location)" == "$root/home/Pictures/Screenshots" ]]
+    [[ -d "$root/home/Pictures/Screenshots" ]]
+    # Each exact command is shown before it runs.
+    grep -qF 'defaults write com.apple.finder ShowPathbar -bool true' <<<"$out"
+    grep -qF 'defaults write com.apple.screencapture location -string "$HOME/Pictures/Screenshots"' <<<"$out"
+    # Finder and SystemUIServer restarted once each (--yes answers the restart question too).
+    [[ "$(sort "$root/killall.log")" == $'Finder\nSystemUIServer' ]] || { cat "$root/killall.log"; return 1; }
+    # Everything reads back as applied: the next apply prints and writes nothing.
+    : >"$root/home/.defaults/writes.log"
+    out="$(run_tweaks "$root" "$script" DEVENV_YES=1)"
+    [[ -z "$out" ]] || { echo "    second run was not quiet:"; echo "$out"; return 1; }
+    [[ ! -s "$root/home/.defaults/writes.log" ]]
+}
+
+test_macos_tweaks_are_silent_when_each_reads_applied_or_was_declined() {
+    local root="$work/mactweaks-quiet" script out d="$work/mactweaks-quiet/home/.defaults" id
+    script="$(macos_tweaks "$root")"
+    # Applied by hand (as `defaults read` prints them) ...
+    echo 1 >"$d/NSGlobalDomain.AppleShowAllExtensions"
+    echo 1 >"$d/com.apple.finder.ShowPathbar"
+    echo 2 >"$d/NSGlobalDomain.KeyRepeat"
+    echo 15 >"$d/NSGlobalDomain.InitialKeyRepeat"
+    # ... or declined earlier.
+    mkdir -p "$root/state/dev"
+    for id in show-hidden-files screenshots-folder; do : >"$root/state/dev/tweak-$id.declined"; done
+    out="$(run_tweaks "$root" "$script" DEVENV_YES=1)"
+    [[ -z "$out" ]] || { echo "    not quiet:"; echo "$out"; return 1; }
+    [[ ! -e "$d/writes.log" && ! -e "$root/killall.log" ]]
+    # Half of a two-key tweak is not applied: it is offered again.
+    echo 30 >"$d/NSGlobalDomain.InitialKeyRepeat"
+    out="$(run_tweaks "$root" "$script" DEVENV_YES=1)"
+    grep -qF 'defaults write NSGlobalDomain KeyRepeat -int 2' <<<"$out" || { echo "$out"; return 1; }
+    [[ "$(mac_default "$root" NSGlobalDomain InitialKeyRepeat)" == 15 ]]
+}
+
+test_macos_tweaks_ask_one_by_one_and_remember_a_no() {
+    local root="$work/mactweaks-ask" script out id
+    script="$(macos_tweaks "$root")"
+    # At a terminal (`script` gives it a pty): yes to the first tweak, no to the
+    # other four, and no to restarting Finder.
+    out="$(printf 'y\nn\nn\nn\nn\nn\n' | env -i HOME="$root/home" PATH="$root/bin:$(system_without)" \
+        XDG_STATE_HOME="$root/state" TERM=dumb timeout -k 5 60 script -qec "bash $script" /dev/null | tr -d '\r')"
+    echo "$out"
+    grep -qF 'Apply: defaults write NSGlobalDomain AppleShowAllExtensions -bool true ?' <<<"$out"
+    [[ "$(mac_default "$root" NSGlobalDomain AppleShowAllExtensions)" == 1 ]]
+    [[ "$(wc -l <"$root/home/.defaults/writes.log")" == 1 ]] || { cat "$root/home/.defaults/writes.log"; return 1; }
+    for id in show-hidden-files finder-path-bar fast-key-repeat screenshots-folder; do
+        [[ -f "$root/state/dev/tweak-$id.declined" ]] || { echo "    no marker for $id"; return 1; }
+    done
+    [[ ! -e "$root/state/dev/tweak-show-file-extensions.declined" ]]
+    grep -q 'Restart Finder now' <<<"$out"
+    [[ ! -e "$root/killall.log" ]] || { echo "    restarted without a yes"; return 1; }
+    # Not asked again, even under --yes.
+    out="$(run_tweaks "$root" "$script" DEVENV_YES=1)"
+    [[ -z "$out" ]] || { echo "    asked again:"; echo "$out"; return 1; }
+}
+
+test_macos_tweaks_without_anyone_to_ask_are_reported_once_and_left_alone() {
+    local root="$work/mactweaks-notty" script out
+    script="$(macos_tweaks "$root")"
+    out="$(run_tweaks "$root" "$script")"
+    grep -q 'macOS tweaks' <<<"$out" || { echo "$out"; return 1; }
+    [[ ! -e "$root/home/.defaults/writes.log" ]]
+    compgen -G "$root/state/dev/*.declined" >/dev/null && return 1   # not a "no": asked once there is a terminal
+    out="$(run_tweaks "$root" "$script")"
+    [[ -z "$out" ]] || { echo "    second run was not quiet:"; echo "$out"; return 1; }
+    [[ "$(grep -c 'macos tweaks' "$root/state/dev/skipped.log")" == 1 ]]
+    # --yes later applies them.
+    run_tweaks "$root" "$script" DEVENV_YES=1 >/dev/null
+    [[ "$(mac_default "$root" com.apple.finder ShowPathbar)" == 1 ]]
 }
 
 # ---- Windows host
