@@ -805,6 +805,93 @@ test_login_shell_step_reports_once_when_it_cannot_change_the_shell() {
     grep -q 'chsh -s .*zsh' "$root/home/chsh.log" || { echo "    not retried once zsh and sudo were there"; return 1; }
 }
 
+# ---- Desktop: VS Code on Linux (#4)
+
+test_linux_vscode_step_only_renders_with_desktop_on_linux() {
+    local os names
+    names="$(rendered_names full linux)"
+    ! grep -q vscode <<<"$names" || { echo "    rendered without desktop:"; echo "$names"; return 1; }
+    names="$(DEVENV_ADD=desktop rendered_names minimal linux)"
+    grep -qx 'run_onchange_after_35-vscode.sh' <<<"$names" || { echo "    missing with desktop:"; echo "$names"; return 1; }
+    for os in darwin windows; do
+        names="$(DEVENV_ADD=desktop rendered_names minimal "$os")"
+        ! grep -qx 'run_onchange_after_35-vscode.sh' <<<"$names" || { echo "    rendered on $os"; return 1; }
+    done
+}
+
+test_linux_vscode_step_passes_shellcheck() {
+    local name out
+    while IFS=$'\t' read -r name out; do
+        [[ "$name" == *vscode.sh ]] || continue
+        shellcheck -s bash "$out" || return 1
+        return 0
+    done < <(DEVENV_ADD=desktop render_scripts minimal linux)
+    echo "    no vscode script rendered"; return 1
+}
+
+# vscode_run <name> <PATH> <kernel osrelease> [VAR=value...]: runs the rendered Linux
+# VS Code step (desktop on) without a tty; state in $work/vscode-<name>/state.
+vscode_run() {
+    local root="$work/vscode-$1" path="$2" kernel="$3" script; shift 3
+    init_config "$root" DEVENV_ADD=desktop
+    script="$(render_script "$root" 35-vscode)"
+    printf '%s\n' "$kernel" >"$root/osrelease"
+    env -i HOME="$root/home" PATH="$path" XDG_STATE_HOME="$root/state" DEVENV_OSRELEASE="$root/osrelease" "$@" \
+        setsid -w bash "$script" </dev/null 2>&1
+}
+
+# vscode_skipped <name>: the skip reasons the step recorded.
+vscode_skipped() { cut -f2- "$work/vscode-$1/state/dev/skipped.log" 2>/dev/null; }
+
+# Kernel release strings as WSL 2 and a stock Ubuntu kernel report them.
+wsl_kernel=6.6.87.2-microsoft-standard-WSL2
+linux_kernel=6.8.0-45-generic
+
+test_linux_vscode_step_is_skipped_under_wsl_because_the_host_owns_it() {
+    local out path
+    path="$(fake_distro dnf)"
+    out="$(vscode_run wsl "$path" "$wsl_kernel" DEVENV_YES=1)" || { echo "$out"; return 1; }
+    grep -qi '^vscode.*windows host' <<<"$(vscode_skipped wsl)" || { echo "$out"; return 1; }
+    [[ ! -s "$work/distro-dnf/log" ]] || { echo "    the package manager ran:"; cat "$work/distro-dnf/log"; return 1; }
+}
+
+test_linux_vscode_step_is_skipped_on_pacman_and_apk_with_the_reason() {
+    local out pm
+    for pm in pacman apk; do
+        out="$(vscode_run "$pm" "$(fake_distro "$pm")" "$linux_kernel" DEVENV_YES=1)" || { echo "$out"; return 1; }
+        grep -q "^vscode.*$pm" <<<"$(vscode_skipped "$pm")" || { echo "    $pm:"; echo "$out"; return 1; }
+        [[ ! -s "$work/distro-$pm/log" ]] || { echo "    $pm ran:"; cat "$work/distro-$pm/log"; return 1; }
+    done
+}
+
+test_linux_vscode_step_is_skipped_without_sudo() {
+    local out
+    out="$(vscode_run nosudo "$(fake_distro dnf)" "$linux_kernel" DEVENV_YES=1 DEVENV_NO_SUDO=1)" || { echo "$out"; return 1; }
+    grep -q '^vscode.*sudo' <<<"$(vscode_skipped nosudo)" || { echo "$out"; return 1; }
+    [[ ! -s "$work/distro-dnf/log" ]] || { echo "    ran as root:"; cat "$work/distro-dnf/log"; return 1; }
+}
+
+test_linux_vscode_step_leaves_an_existing_code_alone() {
+    local out path bin="$work/vscode-hand/bin"
+    path="$(fake_distro dnf)"
+    mkdir -p "$bin"
+    printf '#!/bin/sh
+echo 1.106.0
+' >"$bin/code"; chmod +x "$bin/code"
+    out="$(vscode_run hand "$bin:$path" "$linux_kernel" DEVENV_YES=1)" || { echo "$out"; return 1; }
+    [[ ! -s "$work/distro-dnf/log" ]] || { echo "    reinstalled:"; cat "$work/distro-dnf/log"; return 1; }
+    [[ -z "$(vscode_skipped hand)" ]] || { echo "    recorded a skip: $(vscode_skipped hand)"; return 1; }
+}
+
+test_linux_vscode_repository_is_only_added_after_asking() {
+    local out
+    # No tty and no --yes: nobody said yes, so nothing is written or installed.
+    out="$(vscode_run unasked "$(fake_distro dnf)" "$linux_kernel")" || { echo "$out"; return 1; }
+    grep -q '^vscode' <<<"$(vscode_skipped unasked)" || { echo "$out"; return 1; }
+    # (Checking for passwordless sudo is fine; running anything as root is not.)
+    ! grep -qvx 'sudo true' "$work/distro-dnf/log" || { echo "    ran without asking:"; cat "$work/distro-dnf/log"; return 1; }
+}
+
 # ---- Windows host
 
 test_windows_host_gets_the_shared_configs_and_not_the_unix_shells() {
