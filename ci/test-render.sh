@@ -1164,6 +1164,150 @@ JSON
     grep -q 'Frobnicate (pwsh exited with 3)' "$h/.local/state/dev/failed.log" || { cat "$h/.local/state/dev/failed.log"; return 1; }
 }
 
+# ---- Desktop: Windows OS tweaks (#8)
+# The tweak step runs in pwsh against a fake reg.exe (Linux pwsh has no HKCU: drive).
+# Expected keys are Microsoft's (Explorer\Advanced HideFileExt/Hidden, and the
+# InprocServer32 default value of {86ca1aa0-...} for Windows 11's classic menu).
+
+test_windows_tweaks_step_runs_only_on_windows_with_desktop_on() {
+    local os
+    ! grep -q 'tweaks' <<<"$(rendered_names minimal windows)" || { echo "    tweaks without desktop"; return 1; }
+    grep -q 'desktop-tweaks\.ps1$' <<<"$(DEVENV_ADD=desktop rendered_names minimal windows)" ||
+        { DEVENV_ADD=desktop rendered_names minimal windows; return 1; }
+    for os in linux darwin; do
+        ! grep -q 'tweaks\.ps1$' <<<"$(DEVENV_ADD=desktop rendered_names minimal "$os")" || { echo "    ps1 tweaks on $os"; return 1; }
+    done
+}
+
+# win_tweaks <dir> <build>: a fake Windows of that build in <dir> (a registry store
+# with lines "KEY<TAB>NAME<TAB>TYPE<TAB>DATA", NAME % = the key exists, @ = its
+# default value; reg.exe add/query on it, in reg.exe's output format) and
+# $tweaks, the rendered tweak step. Run it with `tweaks_run` (YES=0: no --yes).
+win_tweaks() {
+    tw="$1"
+    mkdir -p "$tw/bin" "$tw/home"
+    tweaks="$(DEVENV_ADD=desktop render_scripts minimal windows | awk -F'\t' '/desktop-tweaks/ {print $2}')"
+    [[ -s "$tweaks" ]] || { echo "    no rendered tweak step"; return 1; }
+    printf '%s\t%%\t\t\n%s\tCurrentBuildNumber\tREG_SZ\t%s\n' \
+        'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion' \
+        'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion' "$2" >"$tw/registry"
+    cat >"$tw/bin/reg.exe" <<'SH'
+#!/usr/bin/env bash
+store="$FAKE_REG"
+echo "$*" >>"$store.log"
+op="$1" key="$2"; shift 2
+key="${key/#HKCU\\/HKEY_CURRENT_USER\\}"; key="${key/#HKLM\\/HKEY_LOCAL_MACHINE\\}"
+name='' type=REG_SZ data=''
+while (($#)); do case "$1" in
+    /v) name="$2"; shift 2 ;; /ve) name='@'; shift ;;
+    /t) type="$2"; shift 2 ;; /d) data="$2"; shift 2 ;; /f) shift ;;
+    *) echo "fake reg.exe: unexpected $1" >&2; exit 2 ;;
+esac; done
+find_line() { while IFS=$'\t' read -r k n ty d; do [[ "$k" == "$key" && "$n" == "$1" ]] && printf '%s\t%s\n' "$ty" "$d" && return 0; done <"$store"; return 1; }
+missing() { echo 'ERROR: The system was unable to find the specified registry key or value.' >&2; exit 1; }
+case "$op" in
+add)
+    find_line % >/dev/null || printf '%s\t%%\t\t\n' "$key" >>"$store"
+    [[ -z "$name" ]] && exit 0
+    grep -vF -- "$key"$'\t'"$name"$'\t' "$store" >"$store.new" || true
+    printf '%s\t%s\t%s\t%s\n' "$key" "$name" "$type" "$data" >>"$store.new"; mv "$store.new" "$store"
+    echo 'The operation completed successfully.' ;;
+query)
+    find_line % >/dev/null || missing
+    if ! found="$(find_line "$name")"; then
+        [[ "$name" == @ ]] || missing
+        found=$'REG_SZ\t(value not set)'
+    fi
+    IFS=$'\t' read -r type data <<<"$found"
+    [[ "$type" == REG_DWORD ]] && data="$(printf '0x%x' "$data")"
+    [[ "$name" == @ ]] && name='(Default)'
+    printf '\n%s\n    %s    %s    %s\n\n' "$key" "$name" "$type" "$data" ;;
+*) echo "fake reg.exe: unexpected $op" >&2; exit 2 ;;
+esac
+SH
+    chmod +x "$tw/bin/reg.exe"
+}
+tweaks_run() {
+    env HOME="$tw/home" FAKE_REG="$tw/registry" PATH="$tw/bin:$PATH" DEVENV_YES="${YES:-1}" \
+        pwsh -NoLogo -NoProfile -File "$tweaks" 2>&1 </dev/null
+}
+# reg_has <key> <name> <type> <data>: the fake registry holds exactly that value.
+reg_has() {
+    grep -qxF -- "$1"$'\t'"$2"$'\t'"$3"$'\t'"$4" "$tw/registry" || { echo "    registry lacks $*:"; cat "$tw/registry"; return 1; }
+}
+adv='HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+menu='HKEY_CURRENT_USER\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32'
+
+test_windows_tweaks_write_microsofts_hkcu_values_then_go_silent() {
+    command -v pwsh >/dev/null 2>&1 || { echo "    (pwsh not installed: not run; CI runs it)" >&2; return 0; }
+    local out
+    win_tweaks "$work/tweaks-win11" 22631
+    out="$(tweaks_run)" || { echo "$out"; return 1; }
+    echo "$out"
+    grep -q '==> Windows tweaks' <<<"$out"
+    # Each change is shown as the exact command before it runs.
+    grep -qF '$ reg.exe add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v HideFileExt /t REG_DWORD /d 0 /f' <<<"$out"
+    reg_has "$adv" HideFileExt REG_DWORD 0
+    reg_has "$adv" Hidden REG_DWORD 1
+    reg_has "$menu" @ REG_SZ ''
+    # HKCU only; Explorer restart asked once, not per tweak.
+    ! grep -q '^add HKLM' "$tw/registry.log" || { cat "$tw/registry.log"; return 1; }
+    [[ "$(grep -c 'Restart Explorer' <<<"$out")" == 1 ]]
+    out="$(tweaks_run)"
+    [[ -z "$out" ]] || { echo "    not silent the second time:"; echo "$out"; return 1; }
+}
+
+test_windows_tweaks_leave_the_context_menu_alone_before_windows_11() {
+    command -v pwsh >/dev/null 2>&1 || { echo "    (pwsh not installed: not run; CI runs it)" >&2; return 0; }
+    local out
+    win_tweaks "$work/tweaks-win10" 19045   # Windows 10 22H2; Windows 11 starts at 22000
+    out="$(tweaks_run)" || { echo "$out"; return 1; }
+    reg_has "$adv" HideFileExt REG_DWORD 0
+    ! grep -qF '86ca1aa0' "$tw/registry" || { echo "$out"; return 1; }
+    [[ -z "$(tweaks_run)" ]] || { echo "    not silent the second time"; return 1; }
+}
+
+test_windows_tweaks_change_nothing_when_nobody_answers() {
+    command -v pwsh >/dev/null 2>&1 || { echo "    (pwsh not installed: not run; CI runs it)" >&2; return 0; }
+    local out st
+    win_tweaks "$work/tweaks-unanswered" 22631
+    st="$tw/home/.local/state/dev"
+    # A classic-menu key without its default value set is not the tweak.
+    printf '%s\t%%\t\t\n' "$menu" >>"$tw/registry"
+    # No terminal and no --yes: said once (one skip), then quiet until someone can answer.
+    out="$(YES=0 tweaks_run)" || { echo "$out"; return 1; }
+    grep -q 'Skipped: windows tweaks: 3 not applied, nobody to ask' <<<"$out" || { echo "$out"; return 1; }
+    ! grep -q '^add' "$tw/registry.log" || { cat "$tw/registry.log"; return 1; }
+    [[ -e "$st/windows-tweaks.waiting" ]]
+    out="$(YES=0 tweaks_run)"
+    [[ -z "$out" ]] || { echo "    not quiet while waiting:"; echo "$out"; return 1; }
+    # Nobody said no, so nothing is declined: --yes applies them all.
+    [[ -z "$(find "$st" -name 'tweak-*.declined')" ]]
+    out="$(tweaks_run)" || { echo "$out"; return 1; }
+    reg_has "$menu" @ REG_SZ ''
+    [[ ! -e "$st/windows-tweaks.waiting" ]]
+}
+
+test_windows_tweaks_are_silent_when_each_is_applied_or_declined() {
+    command -v pwsh >/dev/null 2>&1 || { echo "    (pwsh not installed: not run; CI runs it)" >&2; return 0; }
+    local out st
+    win_tweaks "$work/tweaks-done" 22631
+    st="$tw/home/.local/state/dev"
+    printf '%s\t%%\t\t\n%s\tHideFileExt\tREG_DWORD\t0\n' "$adv" "$adv" >>"$tw/registry"
+    mkdir -p "$st"
+    touch "$st/tweak-show-hidden-files.declined" "$st/tweak-classic-context-menu.declined"
+    out="$(YES=0 tweaks_run)"
+    [[ -z "$out" ]] || { echo "    not silent:"; echo "$out"; return 1; }
+    out="$(tweaks_run)"
+    [[ -z "$out" ]] || { echo "    --yes overrode a declined tweak:"; echo "$out"; return 1; }
+    ! grep -q '^add' "$tw/registry.log" || { cat "$tw/registry.log"; return 1; }
+    # A declined marker holds only that tweak back.
+    rm "$st/tweak-show-hidden-files.declined"
+    out="$(tweaks_run)" || { echo "$out"; return 1; }
+    reg_has "$adv" Hidden REG_DWORD 1
+    ! grep -qE 'HideFileExt|86ca1aa0' <<<"$out" || { echo "$out"; return 1; }
+}
+
 test_jless_is_left_out_on_linux_arm64_where_it_has_no_build() {
     render arm64 minimal
     "$CHEZMOI" apply --source "$repo" --no-tty --force --config "$work/arm64/chezmoi.toml" --cache "$work/arm64/cache" \
