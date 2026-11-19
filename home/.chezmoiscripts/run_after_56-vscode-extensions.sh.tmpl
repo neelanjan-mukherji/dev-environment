@@ -33,7 +33,8 @@ rm -f "$waiting"
 extensions=({{ range .desktop.extensions.shared }} {{ . | quote }}{{ end }})
 installed="$(code --list-extensions)"
 missing=()
-for id in "${extensions[@]}"; do
+# (Guarded: bash 3.2 under set -u fails on an empty array.)
+for id in ${extensions[@]+"${extensions[@]}"}; do
     # IDs are case-insensitive; the list prints the Marketplace's casing.
     grep -qixF "$id" <<<"$installed" || missing+=("$id")
 done

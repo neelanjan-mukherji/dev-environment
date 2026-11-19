@@ -1676,6 +1676,23 @@ test_vscode_extensions_step_is_retried_once_code_is_there_then_quiet() {
     [[ -z "$out" ]] || { echo "    not quiet once installed:"; echo "$out"; return 1; }
 }
 
+test_vscode_extensions_step_copes_with_an_empty_list_on_macos() {
+    # A fresh Mac runs it under /bin/bash 3.2, where expanding an empty array under
+    # set -u fails. Set BASH32 to a bash 3.2 to run it as that Mac does.
+    local root="$work/vscode-ext-empty" out
+    init_config "$root" DEVENV_ADD=desktop
+    "$CHEZMOI" execute-template --source "$repo" --config "$root/chezmoi.toml" --cache "$root/cache" \
+        --persistent-state "$root/state.boltdb" \
+        --override-data '{"chezmoi":{"os":"darwin"},"desktop":{"extensions":{"shared":[]}}}' \
+        <"$repo/home/.chezmoiscripts/run_after_56-vscode-extensions.sh.tmpl" >"$root/script.sh"
+    grep -q 'extensions=( *)' "$root/script.sh" || { echo "    list not empty:"; grep 'extensions=' "$root/script.sh"; return 1; }
+    fake_code "$root"
+    mkdir -p "$root/home"
+    out="$(env -i HOME="$root/home" PATH="$root/bin:$(system_without code brew)" XDG_STATE_HOME="$root/state" \
+        "${BASH32:-bash}" "$root/script.sh" 2>&1)" || { echo "$out"; return 1; }
+    [[ -z "$out" ]] || { echo "    not quiet:"; echo "$out"; return 1; }
+}
+
 test_windows_vscode_extensions_step_is_retried_once_code_is_there_then_quiet() {
     command -v pwsh >/dev/null 2>&1 || { echo "    (pwsh not installed: not run; CI runs it)" >&2; return 0; }
     local root="$work/vscode-ext-win" script out
