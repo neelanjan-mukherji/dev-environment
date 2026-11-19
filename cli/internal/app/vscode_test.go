@@ -1,6 +1,9 @@
 package app_test
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // VS Code extensions (desktop component): `dev update` updates them on every OS,
 // only when desktop is on and code is there.
@@ -31,6 +34,21 @@ func TestUpdateLeavesVSCodeAloneWithoutDesktop(t *testing.T) {
 	}
 	if r.called("code --update-extensions") >= 0 {
 		t.Fatalf("ran code without desktop; calls:\n%s", r.log())
+	}
+}
+
+func TestUpdateWarnsWhenItCannotTellWhetherDesktopIsOn(t *testing.T) {
+	b := newBox(t)
+	b.configured(t)
+	r := &fakeRunner{rules: []rule{
+		{match: "execute-template {{ .profile }}", fail: true, out: "template: bad config"}, sourceAt(b.repo),
+	}}
+	out, code := run(t, r, nil, "update", "--yes")
+	if code != 0 {
+		t.Fatalf("an unreadable selection failed the update: exit %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "VS Code extensions") || !strings.Contains(out, "template: bad config") {
+		t.Fatalf("want a warning that names VS Code extensions and the cause\n%s", out)
 	}
 }
 
