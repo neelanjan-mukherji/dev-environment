@@ -22,7 +22,7 @@ $secondOk = $LASTEXITCODE -eq 0
 Check 'second install succeeds' $secondOk $second
 # Step headers of the install scripts; dev's own steps (WSL etc.) print every run.
 $plain = $second -replace ([string][char]27 + '\[[0-9;]*m'), ''
-$reran = $plain -split "`n" | Where-Object { $_ -match '==> (winget packages|XDG_CONFIG_HOME|PowerShell profile|Neovim plugins|Windows Terminal|OS tweaks)' }
+$reran = $plain -split "`n" | Where-Object { $_ -match '==> (winget packages|XDG_CONFIG_HOME|PowerShell profile|Neovim plugins|Windows Terminal|Windows tweaks)' }
 Check 'second install is a no-op' ($secondOk -and -not $reran) ($reran -join "`n")
 
 Write-Host "---- $fail failed"

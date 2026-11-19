@@ -944,7 +944,7 @@ test_windows_tweaks_write_microsofts_hkcu_values_then_go_silent() {
     win_tweaks "$work/tweaks-win11" 22631
     out="$(tweaks_run)" || { echo "$out"; return 1; }
     echo "$out"
-    grep -q '==> OS tweaks' <<<"$out"
+    grep -q '==> Windows tweaks' <<<"$out"
     # Each change is shown as the exact command before it runs.
     grep -qF '$ reg.exe add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v HideFileExt /t REG_DWORD /d 0 /f' <<<"$out"
     reg_has "$adv" HideFileExt REG_DWORD 0
@@ -969,35 +969,43 @@ test_windows_tweaks_leave_the_context_menu_alone_before_windows_11() {
 
 test_windows_tweaks_change_nothing_when_nobody_answers() {
     command -v pwsh >/dev/null 2>&1 || { echo "    (pwsh not installed: not run; CI runs it)" >&2; return 0; }
-    local out id
+    local out st
     win_tweaks "$work/tweaks-unanswered" 22631
+    st="$tw/home/.local/state/dev"
     # A classic-menu key without its default value set is not the tweak.
     printf '%s\t%%\t\t\n' "$menu" >>"$tw/registry"
+    # No terminal and no --yes: said once (one skip), then quiet until someone can answer.
     out="$(YES=0 tweaks_run)" || { echo "$out"; return 1; }
-    for id in show-file-extensions show-hidden-files classic-context-menu; do
-        grep -q "Skipped: desktop tweak $id" <<<"$out" || { echo "$out"; return 1; }
-    done
+    grep -q 'Skipped: windows tweaks: 3 not applied, nobody to ask' <<<"$out" || { echo "$out"; return 1; }
     ! grep -q '^add' "$tw/registry.log" || { cat "$tw/registry.log"; return 1; }
-    # Nobody said no, so nothing is remembered: asked again next time.
-    [[ -z "$(find "$tw/home/.local/state/dev" -name 'declined*')" ]]
-    ! grep -q 'Restart' <<<"$out"
+    [[ -e "$st/windows-tweaks.waiting" ]]
+    out="$(YES=0 tweaks_run)"
+    [[ -z "$out" ]] || { echo "    not quiet while waiting:"; echo "$out"; return 1; }
+    # Nobody said no, so nothing is declined: --yes applies them all.
+    [[ -z "$(find "$st" -name 'tweak-*.declined')" ]]
+    out="$(tweaks_run)" || { echo "$out"; return 1; }
+    reg_has "$menu" @ REG_SZ ''
+    [[ ! -e "$st/windows-tweaks.waiting" ]]
 }
 
 test_windows_tweaks_are_silent_when_each_is_applied_or_declined() {
     command -v pwsh >/dev/null 2>&1 || { echo "    (pwsh not installed: not run; CI runs it)" >&2; return 0; }
-    local out
+    local out st
     win_tweaks "$work/tweaks-done" 22631
+    st="$tw/home/.local/state/dev"
     printf '%s\t%%\t\t\n%s\tHideFileExt\tREG_DWORD\t0\n' "$adv" "$adv" >>"$tw/registry"
-    mkdir -p "$tw/home/.local/state/dev"
-    touch "$tw/home/.local/state/dev/declined-tweak-show-hidden-files" "$tw/home/.local/state/dev/declined-tweak-classic-context-menu"
+    mkdir -p "$st"
+    touch "$st/tweak-show-hidden-files.declined" "$st/tweak-classic-context-menu.declined"
     out="$(YES=0 tweaks_run)"
     [[ -z "$out" ]] || { echo "    not silent:"; echo "$out"; return 1; }
+    out="$(tweaks_run)"
+    [[ -z "$out" ]] || { echo "    --yes overrode a declined tweak:"; echo "$out"; return 1; }
     ! grep -q '^add' "$tw/registry.log" || { cat "$tw/registry.log"; return 1; }
     # A declined marker holds only that tweak back.
-    rm "$tw/home/.local/state/dev/declined-tweak-show-hidden-files"
-    out="$(YES=0 tweaks_run)"
-    grep -q 'Skipped: desktop tweak show-hidden-files' <<<"$out" || { echo "$out"; return 1; }
-    ! grep -qE 'show-file-extensions|classic-context-menu' <<<"$out" || { echo "$out"; return 1; }
+    rm "$st/tweak-show-hidden-files.declined"
+    out="$(tweaks_run)" || { echo "$out"; return 1; }
+    reg_has "$adv" Hidden REG_DWORD 1
+    ! grep -qE 'HideFileExt|86ca1aa0' <<<"$out" || { echo "$out"; return 1; }
 }
 
 test_jless_is_left_out_on_linux_arm64_where_it_has_no_build() {
