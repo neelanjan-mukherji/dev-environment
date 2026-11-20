@@ -79,10 +79,15 @@ jobs:
         run: ci/run-containers.sh ubuntu:24.04
 
   windows:
-    name: install Windows host
+    name: install Windows host${{ matrix.add && format(' --add {0}', matrix.add) || '' }}
     timeout-minutes: 60
     needs: check
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # desktop: a real VS Code (winget), extension and Explorer tweak install.
+        add: ['', desktop]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -125,7 +130,7 @@ jobs:
         env:
           DEVENV_DEV_BIN: ${{ github.workspace }}\cli\dist\dev.exe
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./install.ps1 --yes --name 'CI User' --email ci@example.com
+        run: ./install.ps1 --yes --name 'CI User' --email ci@example.com ${{ matrix.add && format('--add {0}', matrix.add) || '' }}
       - name: Verify
         shell: pwsh
         run: ./ci/verify.ps1

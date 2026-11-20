@@ -1,0 +1,78 @@
+{{- $on := includeTemplate "components" . | splitList "," -}}
+{{- if and (eq .chezmoi.os "linux") (has "desktop" $on) -}}
+#!/usr/bin/env bash
+# Runs on every apply so a skipped install (no sudo yet, nobody to ask) is
+# retried; silent once code is on PATH, while it is still impossible after being
+# reported once, and after a "no" (remembered until the marker file is deleted).
+set -Eeuo pipefail
+{{ template "lib.sh" . }}
+
+declined="$DEVENV_STATE/vscode.declined"
+waiting="$DEVENV_STATE/vscode.waiting"
+# Installed by hand, or by an earlier run: leave it alone.
+command -v code >/dev/null 2>&1 && exit 0
+[ -f "$declined" ] && exit 0
+
+pm="$(package_manager)"
+# blocked: why the install can't happen now (the skip to record), without asking anyone.
+blocked() {
+    if is_wsl; then echo "vscode: the Windows host owns VS Code under WSL (\`code\` here opens the host's)"; return; fi
+    case "$pm" in
+        apt | dnf) ;;
+        pacman | apk) echo "vscode: Microsoft publishes VS Code for apt and dnf only, not $pm (install it yourself)"; return ;;
+        *) echo "vscode: no supported package manager here (apt or dnf)"; return ;;
+    esac
+    if [ "$(id -u)" != 0 ] && { [ "$DEVENV_NO_SUDO" = 1 ] || ! command -v sudo >/dev/null 2>&1; }; then
+        echo "vscode (needs sudo)"; return
+    fi
+    have_tty && return   # someone to answer, and to type a sudo password
+    can_sudo || { echo "vscode (needs sudo)"; return; }
+    assume_yes || echo "vscode (Microsoft's repository not added: nobody to ask; run dev setup in a terminal, or with --yes)"
+}
+# Said once, then quiet until that changes, so a re-apply stays a no-op.
+reason="$(blocked)"
+if [ -n "$reason" ]; then
+    [ -f "$waiting" ] && exit 0
+    step "VS Code"
+    : >"$waiting"
+    record_skip "$reason"
+    exit 0
+fi
+rm -f "$waiting"
+
+step "VS Code"
+if ! can_sudo; then
+    : >"$waiting"
+    record_skip "vscode (needs sudo)"
+    exit 0
+fi
+if ! confirm "Add Microsoft's VS Code repository and signing key, then install code?"; then
+    if have_tty && ! assume_yes; then
+        : >"$declined"
+        info "Won't ask again. To be asked next time: rm $declined"
+    fi
+    record_skip "vscode (Microsoft's repository not added)"
+    exit 0
+fi
+
+# Microsoft's repository and key, as https://code.visualstudio.com/docs/setup/linux sets them up.
+key_url=https://packages.microsoft.com/keys/microsoft.asc
+case "$pm" in
+    apt)
+        run curl -fsSL "$key_url" -o "$DEVENV_STATE/microsoft.asc"
+        as_root gpg --dearmor --yes -o /usr/share/keyrings/microsoft.gpg "$DEVENV_STATE/microsoft.asc"
+        rm -f "$DEVENV_STATE/microsoft.asc"
+        as_root chmod a+r /usr/share/keyrings/microsoft.gpg
+        printf '%s\n' 'Types: deb' 'URIs: https://packages.microsoft.com/repos/code' 'Suites: stable' \
+            'Components: main' 'Architectures: amd64,arm64,armhf' 'Signed-By: /usr/share/keyrings/microsoft.gpg' |
+            as_root tee /etc/apt/sources.list.d/vscode.sources >/dev/null
+        ;;
+    dnf)
+        as_root rpm --import "$key_url"
+        printf '%s\n' '[code]' 'name=Visual Studio Code' 'baseurl=https://packages.microsoft.com/yumrepos/vscode' \
+            'enabled=1' 'autorefresh=1' 'type=rpm-md' 'gpgcheck=1' "gpgkey=$key_url" |
+            as_root tee /etc/yum.repos.d/vscode.repo >/dev/null
+        ;;
+esac
+pkg_install "$pm" code
+{{- end }}

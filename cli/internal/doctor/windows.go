@@ -43,7 +43,10 @@ func windowsChecks(m Machine) []Check {
 		cs = append(cs, ps("git identity from .gitconfig.local", `if ((git config user.email) -ne `+psQuote(m.Email)+`) { exit 1 }`))
 	}
 	wsl := ps("WSL has a Linux distro", `$env:WSL_UTF8 = '1'; $d = wsl.exe --list --quiet; if ($LASTEXITCODE -ne 0 -or -not ($d | Where-Object { $_ -and $_ -notlike 'docker-desktop*' })) { exit 1 }`)
-	wsl.Skipped = skippedStep(m.State, "wsl", "wsl.skipped")
+	wsl.Skipped = skippedStep(m.State, "wsl.skipped", "wsl")
+	if m.on("desktop") {
+		cs = append(cs, desktopChecks(m)...)
+	}
 	cs = append(cs, wsl,
 		ps("dotfiles in sync", `$out = chezmoi status --exclude externals,scripts; if ($LASTEXITCODE -ne 0) { exit 1 }; if ($out) { $out; chezmoi diff --exclude externals,scripts --no-pager | Select-Object -First 40; exit 1 }`),
 		ps("no step failed", `$f = "$HOME\.local\state\dev\failed.log"; if ((Test-Path $f) -and (Get-Item $f).Length) { Get-Content $f; exit 1 }`),

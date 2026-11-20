@@ -63,7 +63,13 @@ type Settings struct {
 	Profile string
 	Name    string
 	Email   string
+	// Optional: the OptionalComponents this machine adds.
+	Optional []string
 }
+
+// OptionalComponents are the known components that no profile includes; the
+// settings form offers them on top of the profile.
+var OptionalComponents = []string{"cloud", "desktop"}
 
 // Profiles in the order they are offered, with what each adds.
 var Profiles = []struct{ Name, Summary string }{

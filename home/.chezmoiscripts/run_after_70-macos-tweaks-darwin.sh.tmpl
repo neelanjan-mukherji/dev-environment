@@ -1,0 +1,77 @@
+{{- $on := includeTemplate "components" . | splitList "," -}}
+{{- if and (eq .chezmoi.os "darwin") (has "desktop" $on) -}}
+#!/usr/bin/env bash
+# The reviewed macOS tweaks (.desktop.tweaks.darwin), each offered on its own.
+# Runs on every apply; silent when every tweak reads back as applied or was
+# declined. A "no" is remembered in ~/.local/state/dev/tweak-<id>.declined.
+# Per-user `defaults` only: no sudo. Bash 3.2 (first apply on a fresh Mac).
+set -Eeuo pipefail
+{{ template "lib.sh" . }}
+
+# each_tweak <callback>: calls <callback> id description command restart [domain key value]...
+# The command is kept as written (shown, then run with sh -c), so $HOME expands only then.
+# shellcheck disable=SC2016
+each_tweak() {
+    :
+{{- range .desktop.tweaks.darwin }}
+    "$1" {{ .id | quote }} {{ .description | quote }} '{{ .command | replace "'" "'\\''" }}' {{ .restart | quote }}
+{{- range .reads }} {{ .domain | quote }} {{ .key | quote }} {{ .value | quote }}{{ end }}
+{{- end }}
+}
+
+marker() { echo "$DEVENV_STATE/tweak-$1.declined"; }
+
+# applied domain key value [domain key value]...: every pair reads back as its value.
+applied() {
+    while [ "$#" -ge 3 ]; do
+        [ "$(defaults read "$1" "$2" 2>/dev/null)" = "$3" ] || return 1
+        shift 3
+    done
+}
+
+pending=0
+count_pending() {
+    local id="$1"; shift 4
+    [ -f "$(marker "$id")" ] && return 0
+    applied "$@" && return 0
+    pending=$((pending + 1))
+}
+each_tweak count_pending
+[ "$pending" -eq 0 ] && exit 0
+
+# Nobody to ask (no terminal, no --yes): say so once, then stay quiet until there is.
+if nobody_to_ask macos-tweaks.waiting "macOS tweaks" \
+    "macos tweaks: $pending not applied, nobody to ask (run dev setup in a terminal, or with --yes)"; then
+    exit 0
+fi
+
+step "macOS tweaks"
+restarts=""
+offer() {
+    local id="$1" description="$2" command="$3" restart="$4"; shift 4
+    [ -f "$(marker "$id")" ] && return 0
+    applied "$@" && return 0
+    info "$description"
+    if ! confirm "Apply: $command ?"; then
+        if have_tty && ! assume_yes; then
+            : >"$(marker "$id")"
+            info "Won't ask again. To be asked next time: rm $(marker "$id")"
+        fi
+        record_skip "macos tweak $id (declined)"
+        return 0
+    fi
+    show "$command"
+    sh -c "$command"
+    case " $restarts " in *" $restart "*) ;; *) restarts="$restarts $restart" ;; esac
+}
+each_tweak offer
+
+# Restart what needs it (after asking), once each.
+for process in $restarts; do
+    if confirm "Restart $process now so the change takes effect?"; then
+        run killall "$process" || true
+    else
+        info "$process picks up the change the next time it starts."
+    fi
+done
+{{ end -}}

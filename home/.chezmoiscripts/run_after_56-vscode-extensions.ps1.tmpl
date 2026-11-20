@@ -1,0 +1,29 @@
+{{- $on := includeTemplate "components" . | splitList "," -}}
+{{- if has "desktop" $on -}}
+{{- $extensions := concat .desktop.extensions.shared .desktop.extensions.windows -}}
+# After the VS Code install steps. Only adds: extensions installed by hand stay.
+# Runs on every apply, so the extensions follow a VS Code installed later; silent
+# when all are installed, and while code is still missing after being reported once.
+{{ template "lib.ps1" . }}
+
+Update-Path
+$waiting = Join-Path $DevState 'vscode-extensions.waiting'
+if (-not (Get-Command code -ErrorAction SilentlyContinue)) {
+    if (Test-Path $waiting) { exit 0 }
+    Step 'VS Code extensions'
+    New-Item -ItemType File -Force -Path $waiting | Out-Null
+    Add-Skip 'vscode extensions: code is not on PATH'
+    exit 0
+}
+Remove-Item -Force -ErrorAction SilentlyContinue $waiting
+
+$extensions = @({{ range $i, $id := $extensions }}{{ if $i }}, {{ end }}'{{ $id }}'{{ end }})
+$installed = @(& code --list-extensions)
+if ($LASTEXITCODE -ne 0) { throw "code --list-extensions exited with $LASTEXITCODE" }
+# -notcontains compares case-insensitively, as VS Code does with IDs.
+$missing = @($extensions | Where-Object { $installed -notcontains $_ })
+if ($missing.Count -eq 0) { exit 0 }
+
+Step 'VS Code extensions'
+foreach ($id in $missing) { Invoke-Logged code --install-extension $id }
+{{- end }}

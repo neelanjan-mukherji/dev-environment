@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"go.yaml.in/yaml/v3"
+
 	"github.com/neelanjan-mukherji/dev-environment/cli/internal/setup"
 )
 
@@ -222,6 +224,81 @@ func TestSetupReadsMachineYamlAndFlagsWin(t *testing.T) {
 	}
 	if r.called("DEVENV_PROFILE=minimal", "DEVENV_NAME=From File", "DEVENV_ADD=cloud", "chezmoi init") < 0 {
 		t.Fatalf("want file values with the --profile flag on top; calls:\n%s", r.log())
+	}
+}
+
+func TestOptionalComponentsAreTheKnownOnesInNoProfile(t *testing.T) {
+	// The profiles as chezmoi has them (home/.chezmoidata/profiles.yaml).
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "home", ".chezmoidata", "profiles.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var data struct{ Profiles map[string][]string }
+	if err := yaml.Unmarshal(raw, &data); err != nil {
+		t.Fatal(err)
+	}
+	var want []string
+	for _, c := range setup.KnownComponents {
+		in := false
+		for _, cs := range data.Profiles {
+			in = in || slices.Contains(cs, c)
+		}
+		if !in {
+			want = append(want, c)
+		}
+	}
+	got := slices.Sorted(slices.Values(setup.OptionalComponents))
+	if slices.Sort(want); !slices.Equal(got, want) {
+		t.Fatalf("setup.OptionalComponents = %v, want the known components in no profile: %v", got, want)
+	}
+}
+
+func TestSetupFormOffersTheOptionalComponents(t *testing.T) {
+	b := newBox(t)
+	r := &fakeRunner{rules: []rule{{match: "execute-template --init", out: `[data]
+profile = "dev"
+name = ""
+email = ""
+
+[data.components]
+add = ["java", "cloud"]
+remove = ["go"]
+`}}}
+	p := &fakePrompter{
+		answers: map[string]bool{"Apply": true},
+		edit: func(s setup.Settings) setup.Settings {
+			if !slices.Contains(setup.OptionalComponents, "desktop") || !slices.Contains(setup.OptionalComponents, "cloud") {
+				t.Errorf("optional components offered: %v", setup.OptionalComponents)
+			}
+			if !slices.Equal(s.Optional, []string{"cloud"}) {
+				t.Errorf("form not prefilled with the machine's optional components: %v", s.Optional)
+			}
+			s.Optional = []string{"desktop"}
+			return s
+		},
+	}
+	if out, code := run(t, r, p, "setup", "--source", b.repo); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	// java is not optional (full has it) and stays; cloud is unticked; go stays removed.
+	if r.called("DEVENV_ADD=java,desktop", "DEVENV_REMOVE=go", "chezmoi init") < 0 {
+		t.Fatalf("init did not get the form's components; calls:\n%s", r.log())
+	}
+}
+
+func TestSetupAddDesktopUnattended(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			b := newBox(t)
+			r := &fakeRunner{rules: []rule{rendered("dev", "", "")}}
+			if out, code := runOn(t, goos, r, nil, "setup", "--add", "desktop", "--yes", "--source", b.repo); code != 0 {
+				t.Fatalf("exit %d\n%s", code, out)
+			}
+			initAt := r.called("DEVENV_ADD=desktop", "chezmoi init")
+			if initAt < 0 || r.called("chezmoi apply") < initAt {
+				t.Fatalf("want init with desktop added, then apply; calls:\n%s", r.log())
+			}
+		})
 	}
 }
 

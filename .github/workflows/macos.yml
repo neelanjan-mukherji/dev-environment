@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   macos:
-    name: install macOS ${{ matrix.runner }} / ${{ matrix.profile }}
+    name: install macOS ${{ matrix.runner }} / ${{ matrix.profile }}${{ matrix.add && format(' --add {0}', matrix.add) || '' }}
     timeout-minutes: 60
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -19,6 +19,13 @@ jobs:
       matrix:
         runner: [macos-latest, macos-15-intel] # Apple silicon, Intel
         profile: [minimal, full]
+        add: ['']
+        include:
+          # desktop: the VS Code cask, extensions and the macOS tweaks. A new
+          # `add` value, so this is an extra job, not added to minimal's.
+          - runner: macos-latest
+            profile: minimal
+            add: desktop
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -32,7 +39,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MISE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEVENV_DEV_BIN: ${{ github.workspace }}/cli/dist/dev
-        run: ./install.sh --yes --profile ${{ matrix.profile }} --name 'CI User' --email ci@example.com
+        run: ./install.sh --yes --profile ${{ matrix.profile }} --name 'CI User' --email ci@example.com ${{ matrix.add && format('--add {0}', matrix.add) || '' }}
       - name: Verify
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

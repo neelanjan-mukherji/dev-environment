@@ -4,6 +4,7 @@ package doctor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -26,6 +27,8 @@ type Machine struct {
 	OS         string // chezmoi's .chezmoi.os: "linux", "darwin", "windows"
 	Arch       string // chezmoi's .chezmoi.arch: "amd64", "arm64"
 	Distro     string // the Linux distro's os-release ID ("ubuntu", "alpine"), else empty
+	WSL        bool   // Linux inside WSL (the kernel release says "microsoft")
+	Desktop    Desktop
 	State      string // ~/.local/state/dev
 }
 
@@ -37,6 +40,8 @@ const machineTemplate = `{{ .profile }}
 {{ .chezmoi.os }}
 {{ .chezmoi.arch }}
 {{ dig "osRelease" "id" "" .chezmoi }}
+{{ dig "kernel" "osrelease" "" .chezmoi | lower | contains "microsoft" }}
+{{ dig "desktop" (dict) . | toJson }}
 `
 
 // ReadMachine asks chezmoi for this machine's configuration.
@@ -46,15 +51,24 @@ func ReadMachine(ctx context.Context, r sys.Runner) (Machine, error) {
 		return Machine{}, fmt.Errorf("reading the machine config with chezmoi (has setup run?): %w\n%s", err, out)
 	}
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	for len(lines) < 7 {
+	for len(lines) < 9 {
 		lines = append(lines, "")
 	}
-	m := Machine{Profile: lines[0], Email: lines[2], Flavor: lines[3], OS: lines[4], Arch: lines[5], Distro: lines[6], State: stateDir()}
+	m := Machine{Profile: lines[0], Email: lines[2], Flavor: lines[3], OS: lines[4], Arch: lines[5], Distro: lines[6],
+		WSL: lines[7] == "true", State: stateDir()}
 	if lines[1] != "" {
 		m.Components = strings.Split(lines[1], ",")
 	}
+	if lines[8] != "" {
+		if err := json.Unmarshal([]byte(lines[8]), &m.Desktop); err != nil {
+			return Machine{}, fmt.Errorf("reading the desktop data (home/.chezmoidata/desktop.yaml): %w", err)
+		}
+	}
 	return m, nil
 }
+
+// on reports whether component c is on (effective) on this machine.
+func (m Machine) on(c string) bool { return slices.Contains(m.Components, c) }
 
 func stateDir() string {
 	if x := os.Getenv("XDG_STATE_HOME"); x != "" {
@@ -87,6 +101,8 @@ type Check struct {
 	// Skipped reports whether the install step behind this check was skipped
 	// on purpose (no sudo, declined); then a failure is reported as a skip.
 	Skipped func() bool
+	// Hint, when set, is printed under a failure: what it usually means.
+	Hint string
 }
 
 func zsh(name, script string) Check  { return Check{Name: name, Shell: interactiveZsh, Script: script} }
@@ -99,16 +115,20 @@ const loginShellIsZsh = `u="$(id -un)"; if command -v getent >/dev/null; then ge
 // shellQuote quotes s for a POSIX shell.
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// skippedStep reports whether a step was recorded as skipped: a line in
-// skipped.log starting with prefix, or the step's "declined" marker.
-func skippedStep(state, prefix, marker string) func() bool {
+// skippedStep reports whether a step was recorded as skipped: its marker file
+// in the state dir (none when marker is ""), or a skipped.log entry starting
+// with one of the (lower-case) prefixes.
+func skippedStep(state, marker string, prefixes ...string) func() bool {
 	return func() bool {
-		if _, err := os.Stat(filepath.Join(state, marker)); err == nil {
-			return true
+		if marker != "" {
+			if _, err := os.Stat(filepath.Join(state, marker)); err == nil {
+				return true
+			}
 		}
 		log, _ := os.ReadFile(filepath.Join(state, "skipped.log"))
 		for _, l := range strings.Split(string(log), "\n") {
-			if _, entry, ok := strings.Cut(l, "\t"); ok && strings.HasPrefix(strings.ToLower(entry), prefix) {
+			_, entry, ok := strings.Cut(l, "\t")
+			if ok && slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(strings.ToLower(entry), p) }) {
 				return true
 			}
 		}
@@ -158,17 +178,16 @@ func Checks(m Machine) []Check {
 		zsh("bat theme compiled", "bat --list-themes | grep -q "+shellQuote("Catppuccin "+title(m.Flavor))),
 		Check{Name: "bash fallback has tools + aliases", Shell: interactiveBash, Script: `command -v starship && command -v rg && alias gs`},
 		Check{Name: "login shell is zsh", Shell: plainBash, Script: loginShellIsZsh,
-			Skipped: skippedStep(m.State, "login shell", "login-shell.declined")},
+			Skipped: skippedStep(m.State, "login-shell.declined", "login shell")},
 	)
 	if m.Email != "" {
 		cs = append(cs, bash("git identity from .gitconfig.local", `[ "$(git config user.email)" = `+shellQuote(m.Email)+` ]`))
 	}
 
-	on := func(c string) bool { return slices.Contains(m.Components, c) }
 	// Docker is skipped, not failed, where it can't be installed (no sudo, Alpine).
-	dockerSkipped := skippedStep(m.State, "docker", "docker.skipped")
+	dockerSkipped := skippedStep(m.State, "docker.skipped", "docker")
 	for _, c := range componentTools {
-		if on(c.name) {
+		if m.on(c.name) {
 			for _, t := range c.tools {
 				check := zsh("zsh has "+t, "command -v "+t)
 				if c.name == "docker" {
@@ -180,24 +199,27 @@ func Checks(m Machine) []Check {
 			cs = append(cs, zsh("mise does not manage "+c.name, "! mise which "+c.tools[0]))
 		}
 	}
+	if m.on("desktop") {
+		cs = append(cs, desktopChecks(m)...)
+	}
 	if m.OS == "darwin" {
 		cs = append(cs,
 			bash("WezTerm installed", `test -d /Applications/WezTerm.app || test -d "$HOME/Applications/WezTerm.app" || command -v wezterm`),
 			bash("JetBrainsMono Nerd Font installed", `ls "$HOME/Library/Fonts" /Library/Fonts 2>/dev/null | grep -qi 'JetBrainsMonoNerdFont'`),
 		)
-		if on("docker") {
+		if m.on("docker") {
 			cs = append(cs, zsh("zsh has colima", "command -v colima"))
 		}
 	}
-	if on("node") {
+	if m.on("node") {
 		cs = append(cs, zsh("node is the pinned major", `node --version | grep -q "^v26\."`))
 	}
-	if on("docker") {
+	if m.on("docker") {
 		compose := bash("docker compose plugin", `docker compose version`)
 		compose.Skipped = dockerSkipped
 		cs = append(cs, compose)
 	}
-	if on("java") {
+	if m.on("java") {
 		cs = append(cs, zsh("default JDK is Corretto 21", `java -version 2>&1 | grep -q "Corretto-21"`))
 		for _, v := range []string{"8", "17", "25"} {
 			cs = append(cs, zsh("Corretto "+v+" installed", "mise where java@corretto-"+v))
@@ -252,6 +274,9 @@ func Run(ctx context.Context, r sys.Runner, checks []Check, w io.Writer) (failed
 		}
 		failed++
 		fmt.Fprintf(w, "%s %s\n", failStyle.Render("FAIL"), c.Name)
+		if c.Hint != "" {
+			fmt.Fprintf(w, "    %s\n", c.Hint)
+		}
 		for _, l := range lastLines(res.out, 40) {
 			fmt.Fprintf(w, "    %s\n", l)
 		}

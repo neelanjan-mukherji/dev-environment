@@ -1,0 +1,47 @@
+{{- $on := includeTemplate "components" . | splitList "," -}}
+{{- if has "desktop" $on -}}
+#!/usr/bin/env bash
+# After the VS Code install steps. Only adds: extensions installed by hand stay.
+# Runs on every apply, so the extensions follow a VS Code installed later; silent
+# when all are installed, and while code is still missing after being reported once.
+set -Eeuo pipefail
+{{ template "lib.sh" . }}
+
+{{- if eq .chezmoi.os "darwin" }}
+find_brew || true   # the cask links code into Homebrew's bin
+{{- end }}
+reason=""
+{{- if eq .chezmoi.os "linux" }}
+if is_wsl; then
+    reason="vscode extensions: inside WSL, code is the Windows host's (its own setup installs them)"
+fi
+{{- end }}
+if [ -z "$reason" ] && ! command -v code >/dev/null 2>&1; then
+    reason="vscode extensions: code is not on PATH"
+fi
+# Said once (per reason), then quiet until that changes, so a re-apply stays a no-op.
+waiting="$DEVENV_STATE/vscode-extensions.waiting"
+if [ -n "$reason" ]; then
+    [ "$(cat "$waiting" 2>/dev/null)" = "$reason" ] && exit 0
+    step "VS Code extensions"
+    printf '%s\n' "$reason" >"$waiting"
+    record_skip "$reason"
+    exit 0
+fi
+rm -f "$waiting"
+
+extensions=({{ range .desktop.extensions.shared }} {{ . | quote }}{{ end }})
+installed="$(code --list-extensions)"
+missing=()
+# (Guarded: bash 3.2 under set -u fails on an empty array.)
+for id in ${extensions[@]+"${extensions[@]}"}; do
+    # IDs are case-insensitive; the list prints the Marketplace's casing.
+    grep -qixF "$id" <<<"$installed" || missing+=("$id")
+done
+[ "${#missing[@]}" -eq 0 ] && exit 0
+
+step "VS Code extensions"
+for id in "${missing[@]}"; do
+    run code --install-extension "$id"
+done
+{{- end }}

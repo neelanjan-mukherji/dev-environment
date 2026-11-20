@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -89,6 +90,13 @@ func Update(ctx context.Context, uo UpdateOptions, d Deps) error {
 	}
 	// Neovim plugins follow the repo's lazy-lock.json (pinned); restore, never bump.
 	note("Neovim plugins", r.attached(ctx, nil, "nvim", "--headless", "+Lazy! restore", "+qa"))
+	// The desktop component's VS Code: updates what is installed, adds nothing.
+	if s, err := readSelection(ctx, r.Runner); err != nil {
+		r.ui.warn("VS Code extensions: could not read this machine's components, so not updated: " + err.Error())
+		note("VS Code extensions", errStop)
+	} else if slices.Contains(s.effective, "desktop") && r.has(ctx, "code") {
+		note("VS Code extensions", r.attached(ctx, nil, "code", "--update-extensions"))
+	}
 
 	if uo.System {
 		r.ui.step("System packages")

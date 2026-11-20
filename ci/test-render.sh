@@ -17,7 +17,13 @@ trap 'chmod -R u+w "$work" 2>/dev/null; rm -rf "$work"' EXIT
 
 pass=0 fail=0 failed=()
 
+# Kernel release strings as WSL 2 and a stock Ubuntu kernel report them.
+wsl_kernel=6.6.87.2-microsoft-standard-WSL2
+linux_kernel=6.8.0-45-generic
+
 # render <name> <profile> [env assignments...] -> sets $home
+# RENDER_OS fakes the OS for apply; RENDER_KERNEL the kernel release (default: a
+# stock Linux one, so the result doesn't depend on whether the host is WSL).
 render() {
     local name="$1" profile="$2"; shift 2
     local root="$work/$name"
@@ -28,7 +34,8 @@ render() {
         --config "$root/chezmoi.toml" --cache "$root/cache" --persistent-state "$root/state.boltdb" >/dev/null
     "$CHEZMOI" apply --source "$repo" --no-tty --force \
         --config "$root/chezmoi.toml" --cache "$root/cache" --persistent-state "$root/state.boltdb" \
-        --destination "$home" --exclude scripts,externals ${RENDER_OS:+--override-data "{\"chezmoi\":{\"os\":\"$RENDER_OS\"}}"}
+        --destination "$home" --exclude scripts,externals \
+        --override-data "{\"chezmoi\":{${RENDER_OS:+\"os\":\"$RENDER_OS\",}\"kernel\":{\"osrelease\":\"${RENDER_KERNEL:-$linux_kernel}\"}}}"
 }
 
 has()     { grep -qF -- "$2" "$home/$1" || { echo "    expected '$1' to contain: $2"; return 1; }; }
@@ -116,6 +123,84 @@ test_config_dir_is_not_readable_by_other_users() {
     local mode
     mode="$(stat -c %a "$home/.config")"
     [[ $mode == 700 ]] || { echo "    ~/.config mode is $mode"; return 1; }
+}
+
+test_desktop_is_in_no_profile_unless_added() {
+    local root="$work/desktop-gating" p on
+    for p in minimal dev full; do
+        init_config "$root/$p" DEVENV_PROFILE="$p"
+        on="$("$CHEZMOI" execute-template --source "$repo" --config "$root/$p/chezmoi.toml" \
+            --cache "$root/$p/cache" --persistent-state "$root/$p/state.boltdb" '{{ includeTemplate "components" . }}')"
+        [[ ",$on," != *,desktop,* ]] || { echo "    $p: $on"; return 1; }
+    done
+    init_config "$root/added" DEVENV_PROFILE=minimal DEVENV_ADD=desktop
+    on="$("$CHEZMOI" execute-template --source "$repo" --config "$root/added/chezmoi.toml" \
+        --cache "$root/added/cache" --persistent-state "$root/added/state.boltdb" '{{ includeTemplate "components" . }}')"
+    # No requirements: adding desktop to minimal brings nothing else.
+    [[ "$on" == desktop ]] || { echo "    minimal + desktop: $on"; return 1; }
+}
+
+# desktop_data '<template>': render a template against the desktop data.
+desktop_data() {
+    local root="$work/desktop-data"
+    [[ -f "$root/chezmoi.toml" ]] || init_config "$root"
+    "$CHEZMOI" execute-template --source "$repo" --config "$root/chezmoi.toml" \
+        --cache "$root/cache" --persistent-state "$root/state.boltdb" "$1"
+}
+
+test_desktop_data_lists_shared_and_windows_only_extensions() {
+    local shared windows
+    shared="$(desktop_data '{{ range .desktop.extensions.shared }}{{ . }}{{ "\n" }}{{ end }}')"
+    windows="$(desktop_data '{{ range .desktop.extensions.windows }}{{ . }}{{ "\n" }}{{ end }}')"
+    # Marketplace IDs as published by Catppuccin and Microsoft.
+    grep -qx 'catppuccin.catppuccin-vsc' <<<"$shared" || { echo "    shared: $shared"; return 1; }
+    grep -qx 'ms-vscode-remote.remote-wsl' <<<"$windows" || { echo "    windows: $windows"; return 1; }
+    ! grep -qx 'ms-vscode-remote.remote-wsl' <<<"$shared" || { echo "    WSL extension in the shared list"; return 1; }
+    # Lower-case publisher.name, as `code --list-extensions` prints them (the doctor compares).
+    ! grep -v '^[a-z0-9-]*\.[a-z0-9-]*$' <<<"$shared"$'\n'"$windows" || { echo "    bad ID"; return 1; }
+}
+
+test_desktop_data_has_the_reviewed_macos_tweaks() {
+    local out
+    out="$(desktop_data '{{ range .desktop.tweaks.darwin }}{{ .id }}|{{ .restart }}|{{ .command }}|{{ range .reads }}{{ .domain }} {{ .key }}={{ .value }};{{ end }}{{ "\n" }}{{ end }}')"
+    # Keys as documented by Apple (defaults domains of Finder, the global domain and screencapture).
+    local want
+    for want in \
+        'defaults write NSGlobalDomain AppleShowAllExtensions -bool true|NSGlobalDomain AppleShowAllExtensions=1;' \
+        '|Finder|defaults write com.apple.finder AppleShowAllFiles -bool true|com.apple.finder AppleShowAllFiles=1;' \
+        '|Finder|defaults write com.apple.finder ShowPathbar -bool true|com.apple.finder ShowPathbar=1;' \
+        'NSGlobalDomain KeyRepeat=2;NSGlobalDomain InitialKeyRepeat=15;' \
+        '|SystemUIServer|mkdir -p "$HOME/Pictures/Screenshots" && defaults write com.apple.screencapture location -string "$HOME/Pictures/Screenshots"|com.apple.screencapture location=$HOME/Pictures/Screenshots;'; do
+        grep -qF -- "$want" <<<"$out" || { echo "    no tweak with: $want"; echo "$out"; return 1; }
+    done
+    [[ $(wc -l <<<"$out") == 5 ]] || { echo "$out"; return 1; }
+    # Every tweak is per-user: no sudo.
+    ! grep -q sudo <<<"$out"
+}
+
+test_desktop_data_has_the_reviewed_windows_tweaks() {
+    local out
+    out="$(desktop_data '{{ range .desktop.tweaks.windows }}{{ .id }}|{{ .restart }}|{{ .command }}|{{ range .reads }}{{ .key }}!{{ .name }}={{ .value }};{{ end }}|{{ .min_build }}{{ "\n" }}{{ end }}')"
+    # Explorer's per-user settings (HKCU only: no administrator rights).
+    local adv='HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' menu='HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32' want
+    for want in \
+        "|Explorer|reg.exe add \"$adv\" /v HideFileExt /t REG_DWORD /d 0 /f|$adv!HideFileExt=0;|" \
+        "|Explorer|reg.exe add \"$adv\" /v Hidden /t REG_DWORD /d 1 /f|$adv!Hidden=1;|" \
+        "|Explorer|reg.exe add \"$menu\" /f /ve|$menu!=;|22000"; do
+        grep -qF -- "$want" <<<"$out" || { echo "    no tweak with: $want"; echo "$out"; return 1; }
+    done
+    [[ $(wc -l <<<"$out") == 3 ]] || { echo "$out"; return 1; }
+    ! grep -q 'HKLM' <<<"$out"
+}
+
+test_desktop_tweak_ids_are_unique_and_described() {
+    local ids
+    ids="$(desktop_data '{{ range concat .desktop.tweaks.darwin .desktop.tweaks.windows }}{{ .id }}{{ if not .description }} UNDESCRIBED{{ end }}{{ "\n" }}{{ end }}')"
+    ! grep -q UNDESCRIBED <<<"$ids" || { echo "$ids"; return 1; }
+    # IDs name the declined markers in ~/.local/state/dev/: unique per OS and file-name safe.
+    ! grep -v '^[a-z0-9-]*$' <<<"$ids" || { echo "$ids"; return 1; }
+    [[ -z "$(desktop_data '{{ range .desktop.tweaks.darwin }}{{ .id }}{{ "\n" }}{{ end }}' | sort | uniq -d)" ]]
+    [[ -z "$(desktop_data '{{ range .desktop.tweaks.windows }}{{ .id }}{{ "\n" }}{{ end }}' | sort | uniq -d)" ]]
 }
 
 test_unknown_component_is_rejected() {
@@ -280,12 +365,101 @@ test_btop_keeps_its_own_settings_and_only_the_theme_line_is_managed() {
     lacks .config/btop/btop.conf '"Default"'
 }
 
+# ---- desktop: VS Code settings.json (#6)
+# Expected values: Catppuccin's theme labels (github.com/catppuccin/vscode, catppuccin-vsc
+# package.json) and VS Code's setting IDs (code.visualstudio.com/docs/configure/settings).
+vscode_settings=.config/Code/User/settings.json
+
+# vscode_json <file> '<python asserts on s>': load the rendered settings.json as `s`.
+vscode_json() {
+    python3 - "$home/$1" "$2" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1], encoding="utf-8"))
+exec(sys.argv[2])
+PY
+}
+
+test_vscode_settings_keep_the_persons_keys_and_set_the_shared_ones() {
+    render vscode-keep minimal DEVENV_ADD=desktop
+    printf '{\n  "editor.fontSize": 15,\n  "workbench.colorTheme": "Default Dark+",\n  "files.exclude": {"**/.git": true}\n}\n' \
+        > "$home/$vscode_settings"
+    render vscode-keep minimal DEVENV_ADD=desktop
+    vscode_json "$vscode_settings" '
+assert s["editor.fontSize"] == 15, s
+assert s["files.exclude"] == {"**/.git": True}, s
+assert s["workbench.colorTheme"] == "Catppuccin Mocha", s
+assert s["editor.fontFamily"] == "JetBrainsMono Nerd Font", s
+assert s["terminal.integrated.fontFamily"] == "JetBrainsMono Nerd Font", s
+assert s["terminal.integrated.fontLigatures.enabled"] is False, s
+'
+    # Applying again changes nothing (the second-install no-op check).
+    cp "$home/$vscode_settings" "$work/vscode-keep.applied"
+    render vscode-keep minimal DEVENV_ADD=desktop
+    cmp "$work/vscode-keep.applied" "$home/$vscode_settings"
+}
+
+test_vscode_theme_follows_the_flavor_with_catppuccins_published_names() {
+    local flavor want
+    for flavor in latte:'Catppuccin Latte' frappe:'Catppuccin Frappé' macchiato:'Catppuccin Macchiato' mocha:'Catppuccin Mocha'; do
+        want="${flavor#*:}" flavor="${flavor%%:*}"
+        # No settings.json yet: it starts empty.
+        render "vscode-$flavor" minimal DEVENV_ADD=desktop DEVENV_THEME="$flavor"
+        vscode_json "$vscode_settings" "assert s == {
+    'workbench.colorTheme': '$want',
+    'editor.fontFamily': 'JetBrainsMono Nerd Font',
+    'terminal.integrated.fontFamily': 'JetBrainsMono Nerd Font',
+    'terminal.integrated.fontLigatures.enabled': False}, s"
+    done
+}
+
+test_vscode_settings_that_are_not_plain_json_are_left_unchanged() {
+    local fixture="$work/vscode-jsonc.fixture" input
+    render vscode-jsonc minimal DEVENV_ADD=desktop
+    # JSONC as VS Code allows it, a trailing comma, and JSON that isn't an object.
+    for input in '{\n  // my font\n  "editor.fontSize": 15\n}\n' '{ "editor.fontSize": 15, }\n' '[1, 2]\n'; do
+        printf '%b' "$input" > "$fixture"
+        cp "$fixture" "$home/$vscode_settings"
+        render vscode-jsonc minimal DEVENV_ADD=desktop
+        cmp "$fixture" "$home/$vscode_settings" || { echo "    changed: $input"; return 1; }
+    done
+}
+
+test_vscode_settings_go_to_each_oss_path_only_with_desktop() {
+    # code.visualstudio.com/docs/configure/settings: the user settings.json per OS.
+    local os path other found
+    local -A paths=([linux]=.config/Code/User/settings.json
+        [darwin]="Library/Application Support/Code/User/settings.json"
+        [windows]=AppData/Roaming/Code/User/settings.json)
+    for os in linux darwin windows; do
+        path="${paths[$os]}"
+        RENDER_OS="$os" render "vscode-on-$os" minimal DEVENV_ADD=desktop
+        vscode_json "$path" 'assert s["editor.fontFamily"] == "JetBrainsMono Nerd Font", s'
+        for other in "${paths[@]}"; do
+            [[ "$other" == "$path" || ! -e "$home/$other" ]] || { echo "    $os also got $other"; return 1; }
+        done
+        [[ "$os" == darwin || ! -e "$home/Library" ]] || { echo "    $os got a Library folder"; return 1; }
+        RENDER_OS="$os" render "vscode-off-$os" minimal
+        found="$(find "$home" -path '*Code/User*' -print -quit)"
+        [[ -z "$found" ]] || { echo "    $os without desktop got $found"; return 1; }
+    done
+}
+
+test_vscode_settings_are_left_to_the_windows_host_inside_wsl() {
+    # Inside WSL, VS Code (and so its settings.json) is the Windows host's.
+    RENDER_KERNEL="$wsl_kernel" render vscode-wsl minimal DEVENV_ADD=desktop
+    [[ ! -e "$home/.config/Code" ]] || { echo "    WSL got $(find "$home/.config/Code" -type f)"; return 1; }
+    RENDER_KERNEL="$linux_kernel" render vscode-not-wsl minimal DEVENV_ADD=desktop
+    exists "$vscode_settings"
+}
+
 # Render each install script for a profile; prints "<name>\t<rendered path>".
 # render_scripts <profile> [os]: every install script chezmoi runs for that
 # profile (and OS, default this one), rendered; prints "name<TAB>path" per script.
 render_scripts() {
     local profile="$1" os="${2:-}"
-    local root="$work/scripts-$profile-${os:-here}" f out
+    # DEVENV_ADD in the caller's env gets its own config (re-init would carry it over).
+    local add="${DEVENV_ADD:-}"; add="${add// /}"
+    local root="$work/scripts-$profile-${os:-here}${add:+-$add}" f out
     local override=()
     [[ -n "$os" ]] && override=(--override-data "{\"chezmoi\":{\"os\":\"$os\"}}")
     mkdir -p "$root/out"
@@ -646,6 +820,254 @@ test_login_shell_step_reports_once_when_it_cannot_change_the_shell() {
     grep -q 'chsh -s .*zsh' "$root/home/chsh.log" || { echo "    not retried once zsh and sudo were there"; return 1; }
 }
 
+# ---- Desktop: VS Code on Linux (#4)
+
+test_linux_vscode_step_only_renders_with_desktop_on_linux() {
+    local os names
+    names="$(rendered_names full linux)"
+    ! grep -q vscode <<<"$names" || { echo "    rendered without desktop:"; echo "$names"; return 1; }
+    names="$(DEVENV_ADD=desktop rendered_names minimal linux)"
+    # run_after_: runs on every apply, so a skipped install is retried.
+    grep -qx 'run_after_35-vscode.sh' <<<"$names" || { echo "    missing with desktop:"; echo "$names"; return 1; }
+    for os in darwin windows; do
+        names="$(DEVENV_ADD=desktop rendered_names minimal "$os")"
+        ! grep -qx 'run_after_35-vscode.sh' <<<"$names" || { echo "    rendered on $os"; return 1; }
+    done
+}
+
+test_linux_vscode_step_passes_shellcheck() {
+    local name out
+    while IFS=$'\t' read -r name out; do
+        [[ "$name" == *vscode.sh ]] || continue
+        shellcheck -s bash "$out" || return 1
+        return 0
+    done < <(DEVENV_ADD=desktop render_scripts minimal linux)
+    echo "    no vscode script rendered"; return 1
+}
+
+# vscode_linux_run <name> <PATH> <kernel osrelease> [VAR=value...]: runs the rendered Linux
+# VS Code step (desktop on) without a tty; state in $work/vscode-<name>/state.
+vscode_linux_run() {
+    local root="$work/vscode-$1" path="$2" kernel="$3" script; shift 3
+    init_config "$root" DEVENV_ADD=desktop
+    script="$(render_script "$root" 35-vscode)"
+    printf '%s\n' "$kernel" >"$root/osrelease"
+    env -i HOME="$root/home" PATH="$path" XDG_STATE_HOME="$root/state" DEVENV_OSRELEASE="$root/osrelease" "$@" \
+        setsid -w bash "$script" </dev/null 2>&1
+}
+
+# vscode_skipped <name>: the skip reasons the step recorded.
+vscode_skipped() { cut -f2- "$work/vscode-$1/state/dev/skipped.log" 2>/dev/null; }
+
+test_linux_vscode_step_is_skipped_under_wsl_because_the_host_owns_it() {
+    local out path
+    path="$(fake_distro dnf)"
+    out="$(vscode_linux_run wsl "$path" "$wsl_kernel" DEVENV_YES=1)" || { echo "$out"; return 1; }
+    grep -qi '^vscode.*windows host' <<<"$(vscode_skipped wsl)" || { echo "$out"; return 1; }
+    [[ ! -s "$work/distro-dnf/log" ]] || { echo "    the package manager ran:"; cat "$work/distro-dnf/log"; return 1; }
+}
+
+test_linux_vscode_step_is_skipped_on_pacman_and_apk_with_the_reason() {
+    local out pm
+    for pm in pacman apk; do
+        out="$(vscode_linux_run "$pm" "$(fake_distro "$pm")" "$linux_kernel" DEVENV_YES=1)" || { echo "$out"; return 1; }
+        grep -q "^vscode.*$pm" <<<"$(vscode_skipped "$pm")" || { echo "    $pm:"; echo "$out"; return 1; }
+        [[ ! -s "$work/distro-$pm/log" ]] || { echo "    $pm ran:"; cat "$work/distro-$pm/log"; return 1; }
+    done
+}
+
+test_linux_vscode_step_is_skipped_without_sudo() {
+    local out
+    out="$(vscode_linux_run nosudo "$(fake_distro dnf)" "$linux_kernel" DEVENV_YES=1 DEVENV_NO_SUDO=1)" || { echo "$out"; return 1; }
+    grep -q '^vscode.*sudo' <<<"$(vscode_skipped nosudo)" || { echo "$out"; return 1; }
+    [[ ! -s "$work/distro-dnf/log" ]] || { echo "    ran as root:"; cat "$work/distro-dnf/log"; return 1; }
+}
+
+test_linux_vscode_step_leaves_an_existing_code_alone() {
+    local out path bin="$work/vscode-hand/bin"
+    path="$(fake_distro dnf)"
+    mkdir -p "$bin"
+    printf '#!/bin/sh
+echo 1.106.0
+' >"$bin/code"; chmod +x "$bin/code"
+    out="$(vscode_linux_run hand "$bin:$path" "$linux_kernel" DEVENV_YES=1)" || { echo "$out"; return 1; }
+    [[ ! -s "$work/distro-dnf/log" ]] || { echo "    reinstalled:"; cat "$work/distro-dnf/log"; return 1; }
+    [[ -z "$(vscode_skipped hand)" ]] || { echo "    recorded a skip: $(vscode_skipped hand)"; return 1; }
+    # Quiet, as the step runs on every apply (the second-install no-op check).
+    [[ -z "$out" ]] || { echo "    not quiet:"; echo "$out"; return 1; }
+}
+
+test_linux_vscode_step_reports_a_skip_once_and_retries_it() {
+    local out path root="$work/vscode-retry"
+    path="$(fake_distro dnf)"
+    mkdir -p "$root/bin" "$root/home"
+    # Microsoft's repository setup goes to fakes, never the real /etc/yum.repos.d.
+    printf '#!/bin/sh\necho "rpm $*" >>"%s"\n' "$work/distro-dnf/log" >"$root/bin/rpm"
+    printf '#!/bin/sh\ncat >>"$HOME/tee.log"\n' >"$root/bin/tee"
+    chmod +x "$root/bin/rpm" "$root/bin/tee"
+    # No sudo: skipped and said once, then quiet while it stays impossible.
+    out="$(vscode_linux_run retry "$root/bin:$path" "$linux_kernel" DEVENV_YES=1 DEVENV_NO_SUDO=1)" || { echo "$out"; return 1; }
+    grep -q 'VS Code' <<<"$out" || { echo "$out"; return 1; }
+    out="$(vscode_linux_run retry "$root/bin:$path" "$linux_kernel" DEVENV_YES=1 DEVENV_NO_SUDO=1)" || { echo "$out"; return 1; }
+    [[ -z "$out" ]] || { echo "    not quiet the second time:"; echo "$out"; return 1; }
+    [[ "$(vscode_skipped retry | grep -c '^vscode')" = 1 ]] || { vscode_skipped retry; return 1; }
+    # Once sudo is there, the next apply installs it.
+    out="$(vscode_linux_run retry "$root/bin:$path" "$linux_kernel" DEVENV_YES=1)" || { echo "$out"; return 1; }
+    grep -qx 'dnf install -y -q code' "$work/distro-dnf/log" || { echo "$out"; cat "$work/distro-dnf/log"; return 1; }
+}
+
+test_linux_vscode_step_is_quiet_once_declined() {
+    local out root="$work/vscode-declined"
+    mkdir -p "$root/state/dev"
+    : >"$root/state/dev/vscode.declined"
+    out="$(vscode_linux_run declined "$(fake_distro dnf)" "$linux_kernel" DEVENV_YES=1)" || { echo "$out"; return 1; }
+    [[ -z "$out" && -z "$(vscode_skipped declined)" ]] || { echo "    not quiet:"; echo "$out"; return 1; }
+    ! grep -qvx 'sudo true' "$work/distro-dnf/log" || { echo "    ran:"; cat "$work/distro-dnf/log"; return 1; }
+}
+
+test_linux_vscode_repository_is_only_added_after_asking() {
+    local out
+    # No tty and no --yes: nobody said yes, so nothing is written or installed.
+    out="$(vscode_linux_run unasked "$(fake_distro dnf)" "$linux_kernel")" || { echo "$out"; return 1; }
+    grep -q '^vscode' <<<"$(vscode_skipped unasked)" || { echo "$out"; return 1; }
+    # (Checking for passwordless sudo is fine; running anything as root is not.)
+    ! grep -qvx 'sudo true' "$work/distro-dnf/log" || { echo "    ran without asking:"; cat "$work/distro-dnf/log"; return 1; }
+}
+
+# ---- macOS tweaks (desktop component)
+
+test_macos_tweaks_step_is_only_on_macos_with_desktop_on() {
+    local mac linux off
+    mac="$(DEVENV_ADD=desktop rendered_names minimal darwin)"
+    linux="$(DEVENV_ADD=desktop rendered_names minimal linux)"
+    off="$(rendered_names minimal darwin)"
+    printf 'darwin+desktop:\n%s\nlinux+desktop:\n%s\ndarwin:\n%s\n' "$mac" "$linux" "$off"
+    grep -q 'macos-tweaks' <<<"$mac"
+    grep -q 'macos-tweaks' <<<"$linux" && return 1
+    grep -q 'macos-tweaks' <<<"$off" && return 1
+    # The shellcheck test above only sees profiles without desktop, where it is empty.
+    shellcheck -s bash "$(DEVENV_ADD=desktop render_scripts minimal darwin | awk -F'\t' '/macos-tweaks/ {print $2}')"
+}
+
+# macos_tweaks <dir>: the macOS tweaks step rendered for darwin with desktop on, plus
+# fake `defaults` (values in <dir>/home/.defaults/<domain>.<key>) and `killall`
+# (logged to <dir>/killall.log) in <dir>/bin. Prints the script path.
+macos_tweaks() {
+    local root="$1" f bin="$1/bin"
+    init_config "$root" DEVENV_ADD=desktop
+    mkdir -p "$bin" "$root/home/.defaults"
+    f="$(ls "$repo"/home/.chezmoiscripts/*macos-tweaks-darwin.sh.tmpl)"
+    "$CHEZMOI" execute-template --source "$repo" --config "$root/chezmoi.toml" --cache "$root/cache" \
+        --persistent-state "$root/state.boltdb" --override-data '{"chezmoi":{"os":"darwin"}}' <"$f" >"$root/tweaks.sh"
+    cat >"$bin/defaults" <<'SH'
+#!/bin/sh
+# defaults read <domain> <key> | defaults write <domain> <key> -bool|-int|-string <value>
+f="$HOME/.defaults/$2.$3"
+case "$1" in
+    read) [ -f "$f" ] && exec cat "$f"; echo "The domain/default pair of ($2, $3) does not exist" >&2; exit 1 ;;
+    write) case "$4:$5" in -bool:true) v=1 ;; -bool:false) v=0 ;; *) v="$5" ;; esac
+        echo "$v" >"$f"; echo "$2 $3" >>"$HOME/.defaults/writes.log" ;;
+    *) exit 2 ;;
+esac
+SH
+    printf '#!/bin/sh\necho "$*" >>%q\n' "$root/killall.log" >"$bin/killall"
+    chmod +x "$bin/defaults" "$bin/killall"
+    echo "$root/tweaks.sh"
+}
+
+# run_tweaks <dir> <script> [env...]: run it without a terminal; prints its output.
+run_tweaks() {
+    local root="$1" script="$2"; shift 2
+    env -i HOME="$root/home" PATH="$root/bin:$(system_without)" XDG_STATE_HOME="$root/state" "$@" \
+        setsid -w bash "$script" </dev/null 2>&1
+}
+
+# mac_default <dir> <domain> <key>: what `defaults read` would print.
+mac_default() { cat "$1/home/.defaults/$2.$3" 2>/dev/null; }
+
+test_macos_tweaks_apply_apples_defaults_keys_under_yes_then_stay_quiet() {
+    local root="$work/mactweaks-yes" script out
+    script="$(macos_tweaks "$root")"
+    out="$(run_tweaks "$root" "$script" DEVENV_YES=1)" || { echo "$out"; return 1; }
+    echo "$out"
+    # Keys and values from macos-defaults.com (Apple publishes no reference); bools read back as 1.
+    [[ "$(mac_default "$root" NSGlobalDomain AppleShowAllExtensions)" == 1 ]]
+    [[ "$(mac_default "$root" com.apple.finder AppleShowAllFiles)" == 1 ]]
+    [[ "$(mac_default "$root" com.apple.finder ShowPathbar)" == 1 ]]
+    [[ "$(mac_default "$root" NSGlobalDomain KeyRepeat)" == 2 ]]
+    [[ "$(mac_default "$root" NSGlobalDomain InitialKeyRepeat)" == 15 ]]
+    [[ "$(mac_default "$root" com.apple.screencapture location)" == "$root/home/Pictures/Screenshots" ]]
+    [[ -d "$root/home/Pictures/Screenshots" ]]
+    # Each exact command is shown before it runs.
+    grep -qF 'defaults write com.apple.finder ShowPathbar -bool true' <<<"$out"
+    grep -qF 'defaults write com.apple.screencapture location -string "$HOME/Pictures/Screenshots"' <<<"$out"
+    # Finder and SystemUIServer restarted once each (--yes answers the restart question too).
+    [[ "$(sort "$root/killall.log")" == $'Finder\nSystemUIServer' ]] || { cat "$root/killall.log"; return 1; }
+    # Everything reads back as applied: the next apply prints and writes nothing.
+    : >"$root/home/.defaults/writes.log"
+    out="$(run_tweaks "$root" "$script" DEVENV_YES=1)"
+    [[ -z "$out" ]] || { echo "    second run was not quiet:"; echo "$out"; return 1; }
+    [[ ! -s "$root/home/.defaults/writes.log" ]]
+}
+
+test_macos_tweaks_are_silent_when_each_reads_applied_or_was_declined() {
+    local root="$work/mactweaks-quiet" script out d="$work/mactweaks-quiet/home/.defaults" id
+    script="$(macos_tweaks "$root")"
+    # Applied by hand (as `defaults read` prints them) ...
+    echo 1 >"$d/NSGlobalDomain.AppleShowAllExtensions"
+    echo 1 >"$d/com.apple.finder.ShowPathbar"
+    echo 2 >"$d/NSGlobalDomain.KeyRepeat"
+    echo 15 >"$d/NSGlobalDomain.InitialKeyRepeat"
+    # ... or declined earlier.
+    mkdir -p "$root/state/dev"
+    for id in show-hidden-files screenshots-folder; do : >"$root/state/dev/tweak-$id.declined"; done
+    out="$(run_tweaks "$root" "$script" DEVENV_YES=1)"
+    [[ -z "$out" ]] || { echo "    not quiet:"; echo "$out"; return 1; }
+    [[ ! -e "$d/writes.log" && ! -e "$root/killall.log" ]]
+    # Half of a two-key tweak is not applied: it is offered again.
+    echo 30 >"$d/NSGlobalDomain.InitialKeyRepeat"
+    out="$(run_tweaks "$root" "$script" DEVENV_YES=1)"
+    grep -qF 'defaults write NSGlobalDomain KeyRepeat -int 2' <<<"$out" || { echo "$out"; return 1; }
+    [[ "$(mac_default "$root" NSGlobalDomain InitialKeyRepeat)" == 15 ]]
+}
+
+test_macos_tweaks_ask_one_by_one_and_remember_a_no() {
+    local root="$work/mactweaks-ask" script out id
+    script="$(macos_tweaks "$root")"
+    # At a terminal (`script` gives it a pty): yes to the first tweak, no to the
+    # other four, and no to restarting Finder.
+    out="$(printf 'y\nn\nn\nn\nn\nn\n' | env -i HOME="$root/home" PATH="$root/bin:$(system_without)" \
+        XDG_STATE_HOME="$root/state" TERM=dumb timeout -k 5 60 script -qec "bash $script" /dev/null | tr -d '\r')"
+    echo "$out"
+    grep -qF 'Apply: defaults write NSGlobalDomain AppleShowAllExtensions -bool true ?' <<<"$out"
+    [[ "$(mac_default "$root" NSGlobalDomain AppleShowAllExtensions)" == 1 ]]
+    [[ "$(wc -l <"$root/home/.defaults/writes.log")" == 1 ]] || { cat "$root/home/.defaults/writes.log"; return 1; }
+    for id in show-hidden-files finder-path-bar fast-key-repeat screenshots-folder; do
+        [[ -f "$root/state/dev/tweak-$id.declined" ]] || { echo "    no marker for $id"; return 1; }
+    done
+    [[ ! -e "$root/state/dev/tweak-show-file-extensions.declined" ]]
+    grep -q 'Restart Finder now' <<<"$out"
+    [[ ! -e "$root/killall.log" ]] || { echo "    restarted without a yes"; return 1; }
+    # Not asked again, even under --yes.
+    out="$(run_tweaks "$root" "$script" DEVENV_YES=1)"
+    [[ -z "$out" ]] || { echo "    asked again:"; echo "$out"; return 1; }
+}
+
+test_macos_tweaks_without_anyone_to_ask_are_reported_once_and_left_alone() {
+    local root="$work/mactweaks-notty" script out
+    script="$(macos_tweaks "$root")"
+    out="$(run_tweaks "$root" "$script")"
+    grep -q 'macOS tweaks' <<<"$out" || { echo "$out"; return 1; }
+    [[ ! -e "$root/home/.defaults/writes.log" ]]
+    compgen -G "$root/state/dev/*.declined" >/dev/null && return 1   # not a "no": asked once there is a terminal
+    out="$(run_tweaks "$root" "$script")"
+    [[ -z "$out" ]] || { echo "    second run was not quiet:"; echo "$out"; return 1; }
+    [[ "$(grep -c 'macos tweaks' "$root/state/dev/skipped.log")" == 1 ]]
+    # --yes later applies them.
+    run_tweaks "$root" "$script" DEVENV_YES=1 >/dev/null
+    [[ "$(mac_default "$root" com.apple.finder ShowPathbar)" == 1 ]]
+}
+
 # ---- Windows host
 
 test_windows_host_gets_the_shared_configs_and_not_the_unix_shells() {
@@ -712,6 +1134,7 @@ test_powershell_files_parse() {
     for p in minimal full; do
         while IFS=$'\t' read -r name out; do files+=("$out"); done < <(render_scripts "$p" windows)
     done
+    while IFS=$'\t' read -r name out; do files+=("$out"); done < <(DEVENV_ADD=desktop render_scripts minimal windows)
     files+=("$repo/home/private_dot_config/powershell/profile.ps1" "$repo/install.ps1" "$repo/ci/verify.ps1")
     cat >"$work/parse.ps1" <<'PS'
 $bad = 0
@@ -781,6 +1204,159 @@ JSON
             --cache "$work/scripts-minimal-windows/cache" --persistent-state "$work/scripts-minimal-windows/state.boltdb" >"$lib"
     if pw "$lib" >/dev/null; then echo "    a failing command did not fail the step"; return 1; fi
     grep -q 'Frobnicate (pwsh exited with 3)' "$h/.local/state/dev/failed.log" || { cat "$h/.local/state/dev/failed.log"; return 1; }
+}
+
+# pwsh_bin: prints a dir holding only a link to pwsh, so a pwsh test's PATH can be
+# its fakes plus pwsh and nothing of the host's (no real `code`, no WSL's /mnt/c tools).
+pwsh_bin() {
+    local d="$work/pwshbin"
+    [[ -e "$d/pwsh" ]] || { mkdir -p "$d"; ln -s "$(command -v pwsh)" "$d/pwsh"; }
+    echo "$d"
+}
+
+# ---- Desktop: Windows OS tweaks (#8)
+# The tweak step runs in pwsh against a fake reg.exe (Linux pwsh has no HKCU: drive).
+# Expected keys are Microsoft's (Explorer\Advanced HideFileExt/Hidden, and the
+# InprocServer32 default value of {86ca1aa0-...} for Windows 11's classic menu).
+
+test_windows_tweaks_step_runs_only_on_windows_with_desktop_on() {
+    local os
+    ! grep -q 'tweaks' <<<"$(rendered_names minimal windows)" || { echo "    tweaks without desktop"; return 1; }
+    grep -q 'windows-tweaks\.ps1$' <<<"$(DEVENV_ADD=desktop rendered_names minimal windows)" ||
+        { DEVENV_ADD=desktop rendered_names minimal windows; return 1; }
+    for os in linux darwin; do
+        ! grep -q 'tweaks\.ps1$' <<<"$(DEVENV_ADD=desktop rendered_names minimal "$os")" || { echo "    ps1 tweaks on $os"; return 1; }
+    done
+}
+
+# win_tweaks <dir> <build>: a fake Windows of that build in <dir> (a registry store
+# with lines "KEY<TAB>NAME<TAB>TYPE<TAB>DATA", NAME % = the key exists, @ = its
+# default value; reg.exe add/query on it, in reg.exe's output format) and
+# $tweaks, the rendered tweak step. Run it with `tweaks_run` (YES=0: no --yes).
+win_tweaks() {
+    tw="$1"
+    mkdir -p "$tw/bin" "$tw/home"
+    tweaks="$(DEVENV_ADD=desktop render_scripts minimal windows | awk -F'\t' '/windows-tweaks/ {print $2}')"
+    [[ -s "$tweaks" ]] || { echo "    no rendered tweak step"; return 1; }
+    printf '%s\t%%\t\t\n%s\tCurrentBuildNumber\tREG_SZ\t%s\n' \
+        'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion' \
+        'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion' "$2" >"$tw/registry"
+    cat >"$tw/bin/reg.exe" <<'SH'
+#!/usr/bin/env bash
+store="$FAKE_REG"
+echo "$*" >>"$store.log"
+op="$1" key="$2"; shift 2
+key="${key/#HKCU\\/HKEY_CURRENT_USER\\}"; key="${key/#HKLM\\/HKEY_LOCAL_MACHINE\\}"
+name='' type=REG_SZ data=''
+while (($#)); do case "$1" in
+    /v) name="$2"; shift 2 ;; /ve) name='@'; shift ;;
+    /t) type="$2"; shift 2 ;; /d) data="$2"; shift 2 ;; /f) shift ;;
+    *) echo "fake reg.exe: unexpected $1" >&2; exit 2 ;;
+esac; done
+find_line() { while IFS=$'\t' read -r k n ty d; do [[ "$k" == "$key" && "$n" == "$1" ]] && printf '%s\t%s\n' "$ty" "$d" && return 0; done <"$store"; return 1; }
+missing() { echo 'ERROR: The system was unable to find the specified registry key or value.' >&2; exit 1; }
+case "$op" in
+add)
+    find_line % >/dev/null || printf '%s\t%%\t\t\n' "$key" >>"$store"
+    [[ -z "$name" ]] && exit 0
+    grep -vF -- "$key"$'\t'"$name"$'\t' "$store" >"$store.new" || true
+    printf '%s\t%s\t%s\t%s\n' "$key" "$name" "$type" "$data" >>"$store.new"; mv "$store.new" "$store"
+    echo 'The operation completed successfully.' ;;
+query)
+    find_line % >/dev/null || missing
+    if ! found="$(find_line "$name")"; then
+        [[ "$name" == @ ]] || missing
+        found=$'REG_SZ\t(value not set)'
+    fi
+    IFS=$'\t' read -r type data <<<"$found"
+    [[ "$type" == REG_DWORD ]] && data="$(printf '0x%x' "$data")"
+    [[ "$name" == @ ]] && name='(Default)'
+    printf '\n%s\n    %s    %s    %s\n\n' "$key" "$name" "$type" "$data" ;;
+*) echo "fake reg.exe: unexpected $op" >&2; exit 2 ;;
+esac
+SH
+    chmod +x "$tw/bin/reg.exe"
+}
+tweaks_run() {
+    # The fake reg.exe needs bash and coreutils; a Windows reg.exe from WSL's PATH must never run.
+    env HOME="$tw/home" FAKE_REG="$tw/registry" PATH="$tw/bin:$(system_without):$(pwsh_bin)" DEVENV_YES="${YES:-1}" \
+        pwsh -NoLogo -NoProfile -File "$tweaks" 2>&1 </dev/null
+}
+# reg_has <key> <name> <type> <data>: the fake registry holds exactly that value.
+reg_has() {
+    grep -qxF -- "$1"$'\t'"$2"$'\t'"$3"$'\t'"$4" "$tw/registry" || { echo "    registry lacks $*:"; cat "$tw/registry"; return 1; }
+}
+adv='HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+menu='HKEY_CURRENT_USER\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32'
+
+test_windows_tweaks_write_microsofts_hkcu_values_then_go_silent() {
+    command -v pwsh >/dev/null 2>&1 || { echo "    (pwsh not installed: not run; CI runs it)" >&2; return 0; }
+    local out
+    win_tweaks "$work/tweaks-win11" 22631
+    out="$(tweaks_run)" || { echo "$out"; return 1; }
+    echo "$out"
+    grep -q '==> Windows tweaks' <<<"$out"
+    # Each change is shown as the exact command before it runs.
+    grep -qF '$ reg.exe add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v HideFileExt /t REG_DWORD /d 0 /f' <<<"$out"
+    reg_has "$adv" HideFileExt REG_DWORD 0
+    reg_has "$adv" Hidden REG_DWORD 1
+    reg_has "$menu" @ REG_SZ ''
+    # HKCU only; Explorer restart asked once, not per tweak.
+    ! grep -q '^add HKLM' "$tw/registry.log" || { cat "$tw/registry.log"; return 1; }
+    [[ "$(grep -c 'Restart Explorer' <<<"$out")" == 1 ]]
+    out="$(tweaks_run)"
+    [[ -z "$out" ]] || { echo "    not silent the second time:"; echo "$out"; return 1; }
+}
+
+test_windows_tweaks_leave_the_context_menu_alone_before_windows_11() {
+    command -v pwsh >/dev/null 2>&1 || { echo "    (pwsh not installed: not run; CI runs it)" >&2; return 0; }
+    local out
+    win_tweaks "$work/tweaks-win10" 19045   # Windows 10 22H2; Windows 11 starts at 22000
+    out="$(tweaks_run)" || { echo "$out"; return 1; }
+    reg_has "$adv" HideFileExt REG_DWORD 0
+    ! grep -qF '86ca1aa0' "$tw/registry" || { echo "$out"; return 1; }
+    [[ -z "$(tweaks_run)" ]] || { echo "    not silent the second time"; return 1; }
+}
+
+test_windows_tweaks_change_nothing_when_nobody_answers() {
+    command -v pwsh >/dev/null 2>&1 || { echo "    (pwsh not installed: not run; CI runs it)" >&2; return 0; }
+    local out st
+    win_tweaks "$work/tweaks-unanswered" 22631
+    st="$tw/home/.local/state/dev"
+    # A classic-menu key without its default value set is not the tweak.
+    printf '%s\t%%\t\t\n' "$menu" >>"$tw/registry"
+    # No terminal and no --yes: said once (one skip), then quiet until someone can answer.
+    out="$(YES=0 tweaks_run)" || { echo "$out"; return 1; }
+    grep -q 'Skipped: windows tweaks: 3 not applied, nobody to ask' <<<"$out" || { echo "$out"; return 1; }
+    ! grep -q '^add' "$tw/registry.log" || { cat "$tw/registry.log"; return 1; }
+    [[ -e "$st/windows-tweaks.waiting" ]]
+    out="$(YES=0 tweaks_run)"
+    [[ -z "$out" ]] || { echo "    not quiet while waiting:"; echo "$out"; return 1; }
+    # Nobody said no, so nothing is declined: --yes applies them all.
+    [[ -z "$(find "$st" -name 'tweak-*.declined')" ]]
+    out="$(tweaks_run)" || { echo "$out"; return 1; }
+    reg_has "$menu" @ REG_SZ ''
+    [[ ! -e "$st/windows-tweaks.waiting" ]]
+}
+
+test_windows_tweaks_are_silent_when_each_is_applied_or_declined() {
+    command -v pwsh >/dev/null 2>&1 || { echo "    (pwsh not installed: not run; CI runs it)" >&2; return 0; }
+    local out st
+    win_tweaks "$work/tweaks-done" 22631
+    st="$tw/home/.local/state/dev"
+    printf '%s\t%%\t\t\n%s\tHideFileExt\tREG_DWORD\t0\n' "$adv" "$adv" >>"$tw/registry"
+    mkdir -p "$st"
+    touch "$st/tweak-show-hidden-files.declined" "$st/tweak-classic-context-menu.declined"
+    out="$(YES=0 tweaks_run)"
+    [[ -z "$out" ]] || { echo "    not silent:"; echo "$out"; return 1; }
+    out="$(tweaks_run)"
+    [[ -z "$out" ]] || { echo "    --yes overrode a declined tweak:"; echo "$out"; return 1; }
+    ! grep -q '^add' "$tw/registry.log" || { cat "$tw/registry.log"; return 1; }
+    # A declined marker holds only that tweak back.
+    rm "$st/tweak-show-hidden-files.declined"
+    out="$(tweaks_run)" || { echo "$out"; return 1; }
+    reg_has "$adv" Hidden REG_DWORD 1
+    ! grep -qE 'HideFileExt|86ca1aa0' <<<"$out" || { echo "$out"; return 1; }
 }
 
 test_jless_is_left_out_on_linux_arm64_where_it_has_no_build() {
@@ -879,6 +1455,262 @@ test_bootstrap_refuses_a_release_whose_checksum_does_not_match() {
     ! out="$(env HOME="$root/home" DEVENV_RELEASE_URL="file://$root/release" sh "$repo/install.sh" --yes 2>&1)" || { echo "$out"; return 1; }
     grep -q "Checksum mismatch" <<<"$out" || { echo "$out"; return 1; }
     [[ ! -e "$root/home/.local/bin/dev" ]]
+}
+
+# ---- Desktop: VS Code install on macOS and Windows (#3)
+# IDs from Homebrew (formulae.brew.sh/cask/visual-studio-code) and winget-pkgs
+# (manifests/m/Microsoft/VisualStudioCode), not from our data files.
+
+# vscode_scripts <tag> <os> [VAR=value...]: the install scripts chezmoi runs on <os>
+# for a minimal machine with those overrides, as "name<TAB>rendered path".
+vscode_scripts() {
+    local root="$work/vscode-$1" os="$2"; shift 2
+    rm -rf "$root"
+    init_config "$root" "$@"
+    local f out
+    for f in $("$CHEZMOI" managed --source "$repo" --config "$root/chezmoi.toml" --cache "$root/cache" \
+        --persistent-state "$root/state.boltdb" --destination "$root/home" --include scripts \
+        --path-style source-relative --override-data "{\"chezmoi\":{\"os\":\"$os\"}}"); do
+        out="$root/$(basename "$f" .tmpl)"
+        "$CHEZMOI" execute-template --source "$repo" --config "$root/chezmoi.toml" --cache "$root/cache" \
+            --persistent-state "$root/state.boltdb" --override-data "{\"chezmoi\":{\"os\":\"$os\"}}" \
+            <"$repo/home/$f" >"$out"
+        printf '%s\t%s\n' "$(basename "$out")" "$out"
+    done
+}
+
+# vscode_mentions <tag> <os> <id> [VAR=value...]: the scripts on <os> that name <id>.
+vscode_mentions() {
+    local tag="$1" os="$2" id="$3" name out; shift 3
+    while IFS=$'\t' read -r name out; do
+        if grep -qF -- "$id" "$out"; then echo "$name"; fi
+    done < <(vscode_scripts "$tag" "$os" "$@")
+}
+
+test_vscode_is_installed_only_with_desktop_on_and_only_by_its_own_os() {
+    local os got
+    for os in linux darwin windows; do
+        got="$(vscode_mentions "off-$os" "$os" visual-studio-code)$(vscode_mentions "off-$os" "$os" Microsoft.VisualStudioCode)"
+        [[ -z "$got" ]] || { echo "    $os without desktop installs VS Code in: $got"; return 1; }
+    done
+    got="$(vscode_mentions on-darwin darwin visual-studio-code DEVENV_ADD=desktop)"
+    [[ "$got" == *system-packages-darwin.sh ]] || { echo "    darwin cask in: '$got'"; return 1; }
+    got="$(vscode_mentions on-windows windows Microsoft.VisualStudioCode DEVENV_ADD=desktop)"
+    [[ "$got" == *winget-packages.ps1 ]] || { echo "    windows winget in: '$got'"; return 1; }
+    # Neither OS gets the other's package.
+    [[ -z "$(vscode_mentions on-darwin darwin Microsoft.VisualStudioCode DEVENV_ADD=desktop)" ]]
+    [[ -z "$(vscode_mentions on-windows windows visual-studio-code DEVENV_ADD=desktop)" ]]
+    [[ -z "$(vscode_mentions on-linux linux visual-studio-code DEVENV_ADD=desktop)$(vscode_mentions on-linux linux Microsoft.VisualStudioCode DEVENV_ADD=desktop)" ]]
+    shellcheck -s bash "$work/vscode-on-darwin/run_before_11-system-packages-darwin.sh"
+}
+
+test_vscode_cask_is_installed_on_macos_unless_vscode_is_already_there() {
+    local root="$work/vscode-cask" script sys out
+    script="$(vscode_scripts cask-run darwin DEVENV_ADD=desktop | awk -F'\t' '/system-packages-darwin/ {print $2}')"
+    sys="$(system_without brew code)"
+    mkdir -p "$root/bin"
+    # A Homebrew with every formula and the other casks installed; installs are logged.
+    cat >"$root/bin/brew" <<SH
+#!/bin/sh
+case "\$1" in
+    shellenv) ;;
+    list) [ "\$2" = --cask ] && printf 'font-jetbrains-mono-nerd-font\nwezterm\n' || printf 'bash\ngit\ngnupg\ntmux\ntree\nxz\n' ;;
+    *) echo "brew \$*" >>"$root/log" ;;
+esac
+SH
+    chmod +x "$root/bin/brew"
+    mac() { env -i HOME="$root/home" PATH="$root/bin:$sys" XDG_STATE_HOME="$root/state" bash "$script" 2>&1; }
+    mkdir -p "$root/home"; : >"$root/log"
+    out="$(mac)" || { echo "$out"; return 1; }
+    grep -qx 'brew install --cask visual-studio-code' "$root/log" || { echo "$out"; cat "$root/log"; return 1; }
+    # A VS Code installed by hand, as an app or a `code` on PATH, is left alone (and quiet).
+    : >"$root/log"; mkdir -p "$root/home/Applications/Visual Studio Code.app"
+    out="$(mac)"; [[ -z "$out" && ! -s "$root/log" ]] || { echo "$out"; cat "$root/log"; return 1; }
+    rm -rf "$root/home/Applications"
+    printf '#!/bin/sh\n' >"$root/bin/code"; chmod +x "$root/bin/code"
+    out="$(mac)"; [[ -z "$out" && ! -s "$root/log" ]] || { echo "$out"; cat "$root/log"; return 1; }
+}
+
+test_vscode_is_installed_with_winget_for_the_user_unless_code_is_there() {
+    if ! command -v pwsh >/dev/null 2>&1; then
+        echo "    (pwsh not installed: not run; CI runs it)" >&2
+        return 0
+    fi
+    local root="$work/vscode-winget" script out
+    script="$(vscode_scripts winget-run windows DEVENV_ADD=desktop | awk -F'\t' '/winget-packages/ {print $2}')"
+    mkdir -p "$root/bin" "$root/home"
+    # winget has everything but VS Code; calls are logged.
+    cat >"$root/bin/winget" <<SH
+#!/bin/sh
+echo "winget \$*" >>"$root/log"
+case "\$1 \$*" in list*Microsoft.VisualStudioCode*) exit 1 ;; esac
+exit 0
+SH
+    chmod +x "$root/bin/winget"
+    # Only the fakes and pwsh: a host's own `code` (e.g. VS Code under WSL) would hide the install.
+    win() { env HOME="$root/home" PATH="$root/bin:$(pwsh_bin)" DEVENV_YES=1 pwsh -NoLogo -NoProfile -File "$script" 2>&1 </dev/null; }
+    : >"$root/log"
+    out="$(win)" || { echo "$out"; return 1; }
+    # User scope: no UAC prompt, no administrator rights.
+    grep -q '^winget install --id Microsoft.VisualStudioCode --exact --source winget .*--scope user' "$root/log" ||
+        { echo "$out"; cat "$root/log"; return 1; }
+    # A `code` already on PATH is left alone.
+    : >"$root/log"; printf '#!/bin/sh\n' >"$root/bin/code"; chmod +x "$root/bin/code"
+    out="$(win)" || { echo "$out"; return 1; }
+    ! grep -q 'Microsoft.VisualStudioCode' "$root/log" || { echo "$out"; cat "$root/log"; return 1; }
+}
+
+# ---- Desktop: VS Code extensions
+# Expected IDs are the Marketplace's (Catppuccin's and Microsoft's published
+# item names), compared case-insensitively as VS Code does.
+
+# vscode_extensions_script <os>: the rendered extensions step with desktop on.
+vscode_extensions_script() {
+    DEVENV_ADD=desktop render_scripts minimal "$1" | awk -F'\t' '/vscode-extensions/ {print $2}'
+}
+
+test_vscode_extensions_step_is_there_only_with_desktop() {
+    local os
+    for os in linux darwin windows; do
+        ! grep -q vscode-extensions <<<"$(rendered_names full "$os")" || { echo "    $os: without desktop"; return 1; }
+        grep -q vscode-extensions <<<"$(DEVENV_ADD=desktop rendered_names minimal "$os")" || { echo "    $os: missing with desktop"; return 1; }
+    done
+}
+
+test_vscode_extensions_step_lists_the_shared_ids_and_wsl_only_on_windows() {
+    local os f id
+    for os in linux darwin windows; do
+        f="$(vscode_extensions_script "$os")"
+        [[ -s "$f" ]] || { echo "    $os: not rendered"; return 1; }
+        for id in Catppuccin.catppuccin-vsc Catppuccin.catppuccin-vsc-icons EditorConfig.EditorConfig ms-vscode-remote.remote-containers; do
+            grep -qiF "$id" "$f" || { echo "    $os: no $id"; return 1; }
+        done
+        if [[ $os == windows ]]; then
+            grep -qiF ms-vscode-remote.remote-wsl "$f" || { echo "    windows: no WSL extension"; return 1; }
+        else
+            ! grep -qiF ms-vscode-remote.remote-wsl "$f" || { echo "    $os: has the WSL extension"; return 1; }
+            shellcheck -s bash "$f" || { echo "    $os: shellcheck"; return 1; }
+        fi
+    done
+}
+
+# vscode_run <root> <osrelease> [PATH]: run the Linux extensions step (rendered to
+# <root>/script.sh) with the fake code in <root>/bin; prints its output.
+vscode_run() {
+    local root="$1"
+    printf '%s\n' "$2" >"$root/osrelease"
+    env -i HOME="$root/home" PATH="${3:-$root/bin:$(system_without code)}" XDG_STATE_HOME="$root/state" \
+        DEVENV_OSRELEASE="$root/osrelease" bash "$root/script.sh" 2>&1
+}
+
+test_vscode_extensions_step_adds_only_missing_ids_and_never_uninstalls() {
+    local root="$work/vscode-ext" out
+    init_config "$root" DEVENV_ADD=desktop
+    cp "$(render_script "$root" 56-vscode-extensions)" "$root/script.sh"
+    mkdir -p "$root/bin" "$root/home"
+    # Already installed (in the Marketplace's casing), plus one of the person's own.
+    cat >"$root/bin/code" <<SH
+#!/bin/sh
+echo "code \$*" >>"$root/code.log"
+[ "\$1" = --list-extensions ] && printf 'Catppuccin.catppuccin-vsc\nsomeone.their-own\n'
+exit 0
+SH
+    chmod +x "$root/bin/code"
+    out="$(vscode_run "$root" 6.8.0-generic)" || { echo "$out"; return 1; }
+    grep -qix 'code --install-extension editorconfig.editorconfig' "$root/code.log" || { cat "$root/code.log"; return 1; }
+    grep -qix 'code --install-extension ms-vscode-remote.remote-containers' "$root/code.log"
+    ! grep -qix 'code --install-extension catppuccin.catppuccin-vsc' "$root/code.log" || { echo "    reinstalled an installed one"; return 1; }
+    ! grep -q 'uninstall' "$root/code.log" || { echo "    uninstalled something"; return 1; }
+    ! grep -qi 'remote-wsl' "$root/code.log" || { echo "    WSL extension on Linux"; return 1; }
+    grep -qF '$ code --install-extension' <<<"$out" || { echo "    commands not shown:"; echo "$out"; return 1; }
+}
+
+test_vscode_extensions_step_skips_inside_wsl_and_without_code() {
+    local root="$work/vscode-skip" out
+    init_config "$root" DEVENV_ADD=desktop
+    cp "$(render_script "$root" 56-vscode-extensions)" "$root/script.sh"
+    mkdir -p "$root/bin" "$root/home"
+    printf '#!/bin/sh\necho "code $*" >>"%s/code.log"\n' "$root" >"$root/bin/code"; chmod +x "$root/bin/code"
+    # Inside WSL, code is the Windows host's: the host's own step installs them.
+    out="$(vscode_run "$root" 6.6.87.2-microsoft-standard-WSL2)" || { echo "$out"; return 1; }
+    [[ ! -e "$root/code.log" ]] || { echo "    ran the host's code:"; cat "$root/code.log"; return 1; }
+    grep -qi 'vscode extensions.*wsl' "$root/state/dev/skipped.log" || { cat "$root/state/dev/skipped.log"; return 1; }
+    # No code on PATH: a skip with the reason, not a failure.
+    out="$(vscode_run "$root" 6.8.0-generic "$(system_without code)")" || { echo "$out"; return 1; }
+    grep -qi 'vscode extensions.*code is not' "$root/state/dev/skipped.log" || { cat "$root/state/dev/skipped.log"; return 1; }
+}
+
+# fake_code <dir>: a `code` in <dir>/bin whose extensions live in <dir>/installed.
+fake_code() {
+    mkdir -p "$1/bin"; : >"$1/installed"
+    cat >"$1/bin/code" <<SH
+#!/bin/sh
+case "\$1" in
+    --list-extensions) cat "$1/installed" ;;
+    --install-extension) echo "\$2" >>"$1/installed" ;;
+esac
+SH
+    chmod +x "$1/bin/code"
+}
+
+test_vscode_extensions_step_is_retried_once_code_is_there_then_quiet() {
+    local root="$work/vscode-ext-retry" out
+    # run_after_: runs on every apply, so extensions follow a later VS Code install.
+    grep -qx 'run_after_56-vscode-extensions.sh' <<<"$(DEVENV_ADD=desktop rendered_names minimal linux)" ||
+        { echo "    not a run_after_ step"; return 1; }
+    init_config "$root" DEVENV_ADD=desktop
+    cp "$(render_script "$root" 56-vscode-extensions)" "$root/script.sh"
+    mkdir -p "$root/home"
+    # No code yet: said once, then quiet (the second-install no-op check).
+    out="$(vscode_run "$root" "$linux_kernel" "$(system_without code)")" || { echo "$out"; return 1; }
+    grep -q 'VS Code extensions' <<<"$out" || { echo "$out"; return 1; }
+    out="$(vscode_run "$root" "$linux_kernel" "$(system_without code)")" || { echo "$out"; return 1; }
+    [[ -z "$out" ]] || { echo "    not quiet without code:"; echo "$out"; return 1; }
+    [[ "$(grep -c 'vscode extensions' "$root/state/dev/skipped.log")" = 1 ]] || { cat "$root/state/dev/skipped.log"; return 1; }
+    # code shows up (installed by hand, or by a later run): the extensions follow.
+    fake_code "$root"
+    out="$(vscode_run "$root" "$linux_kernel")" || { echo "$out"; return 1; }
+    grep -qix 'editorconfig.editorconfig' "$root/installed" || { echo "$out"; cat "$root/installed"; return 1; }
+    # All there: quiet.
+    out="$(vscode_run "$root" "$linux_kernel")" || { echo "$out"; return 1; }
+    [[ -z "$out" ]] || { echo "    not quiet once installed:"; echo "$out"; return 1; }
+}
+
+test_vscode_extensions_step_copes_with_an_empty_list_on_macos() {
+    # A fresh Mac runs it under /bin/bash 3.2, where expanding an empty array under
+    # set -u fails. Set BASH32 to a bash 3.2 to run it as that Mac does.
+    local root="$work/vscode-ext-empty" out
+    init_config "$root" DEVENV_ADD=desktop
+    "$CHEZMOI" execute-template --source "$repo" --config "$root/chezmoi.toml" --cache "$root/cache" \
+        --persistent-state "$root/state.boltdb" \
+        --override-data '{"chezmoi":{"os":"darwin"},"desktop":{"extensions":{"shared":[]}}}' \
+        <"$repo/home/.chezmoiscripts/run_after_56-vscode-extensions.sh.tmpl" >"$root/script.sh"
+    grep -q 'extensions=( *)' "$root/script.sh" || { echo "    list not empty:"; grep 'extensions=' "$root/script.sh"; return 1; }
+    fake_code "$root"
+    mkdir -p "$root/home"
+    out="$(env -i HOME="$root/home" PATH="$root/bin:$(system_without code brew)" XDG_STATE_HOME="$root/state" \
+        "${BASH32:-bash}" "$root/script.sh" 2>&1)" || { echo "$out"; return 1; }
+    [[ -z "$out" ]] || { echo "    not quiet:"; echo "$out"; return 1; }
+}
+
+test_windows_vscode_extensions_step_is_retried_once_code_is_there_then_quiet() {
+    command -v pwsh >/dev/null 2>&1 || { echo "    (pwsh not installed: not run; CI runs it)" >&2; return 0; }
+    local root="$work/vscode-ext-win" script out
+    grep -qx 'run_after_56-vscode-extensions.ps1' <<<"$(DEVENV_ADD=desktop rendered_names minimal windows)" ||
+        { echo "    not a run_after_ step"; return 1; }
+    script="$(vscode_extensions_script windows)"
+    mkdir -p "$root/home" "$root/nocode"
+    # Only pwsh (and later the fake code): never a host's own code.
+    win() { env HOME="$root/home" PATH="$1:$(system_without code):$(pwsh_bin)" DEVENV_YES=1 pwsh -NoLogo -NoProfile -File "$script" 2>&1 </dev/null; }
+    out="$(win "$root/nocode")" || { echo "$out"; return 1; }
+    grep -q 'VS Code extensions' <<<"$out" || { echo "$out"; return 1; }
+    out="$(win "$root/nocode")" || { echo "$out"; return 1; }
+    [[ -z "$out" ]] || { echo "    not quiet without code:"; echo "$out"; return 1; }
+    fake_code "$root"
+    out="$(win "$root/bin")" || { echo "$out"; return 1; }
+    grep -qix 'ms-vscode-remote.remote-wsl' "$root/installed" || { echo "$out"; cat "$root/installed"; return 1; }
+    out="$(win "$root/bin")" || { echo "$out"; return 1; }
+    [[ -z "$out" ]] || { echo "    not quiet once installed:"; echo "$out"; return 1; }
 }
 
 # ---------------------------------------------------------------- run
